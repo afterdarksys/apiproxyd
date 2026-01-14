@@ -1,0 +1,17 @@
+Site: api.apiproxy.app
+Site Directory: /Users/ryan/development/apiproxy.app
+What is this: API Proxy Cache for On-Site Deployment
+Why: So businesses can deploy the API Proxy Onsite
+      - Cache the question
+      - Cache the response
+      - Cache the question metadata
+      - Cache the question category
+CLI: apiproxy
+     - options:
+ 	- login
+	- api
+	- console
+	- debug 
+	- test 
+        - config
+apiproxy <options> <args> <extended-args> --yml,--json,

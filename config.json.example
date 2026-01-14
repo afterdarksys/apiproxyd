@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9002,
+    "read_timeout": 15,
+    "write_timeout": 15
+  },
+  "entry_point": "https://api.apiproxy.app",
+  "api_key": "apx_live_your_api_key_here",
+  "cache": {
+    "backend": "sqlite",
+    "path": "~/.apiproxy/cache.db",
+    "ttl": 86400,
+    "postgres_dsn": ""
+  },
+  "offline_endpoints": [
+    "/v1/darkapi/ip/*",
+    "/v1/nerdapi/hash",
+    "/v1/computeapi/*",
+    "/health",
+    "/status"
+  ],
+  "whitelisted_endpoints": [
+    "/v1/darkapi/*",
+    "/v1/nerdapi/*",
+    "/v1/computeapi/*",
+    "/v1/systemapi/*",
+    "/v1/ipapi/*"
+  ]
+}

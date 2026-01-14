@@ -1,0 +1,43 @@
+# Binaries
+apiproxyd
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output
+*.out
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Config files with secrets
+config.local.yml
+config.local.yaml
+config.local.json
+.env
+
+# Cache and data
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+
+# Build artifacts
+dist/
+build/
+bin/
