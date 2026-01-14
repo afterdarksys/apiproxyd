@@ -35,7 +35,7 @@ This guide covers different installation methods for `apiproxyd`.
 curl -sSL https://raw.githubusercontent.com/afterdarktech/apiproxyd/main/install.py | python3 -
 
 # Or clone and run
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 python3 install.py
 ```
@@ -50,7 +50,7 @@ The installer will:
 ### Using Go Install
 
 ```bash
-go install github.com/afterdarktech/apiproxyd@latest
+go install github.com/afterdarksys/apiproxyd@latest
 ```
 
 This installs the binary to `$GOPATH/bin/apiproxy`.
@@ -58,7 +58,7 @@ This installs the binary to `$GOPATH/bin/apiproxy`.
 ### Using Makefile
 
 ```bash
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 make install
 ```
@@ -70,7 +70,7 @@ This builds and installs to `/usr/local/bin/apiproxy`.
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 ```
 
@@ -149,7 +149,7 @@ brew install afterdarktech/tap/apiproxyd
 brew install go
 
 # Clone and build
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 make build
 
@@ -201,7 +201,7 @@ sudo apt update
 sudo apt install golang-go git
 
 # Clone and build
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 make build
 sudo make install
@@ -213,7 +213,7 @@ sudo make install
 sudo dnf install golang git
 
 # Clone and build
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 make build
 sudo make install
@@ -270,7 +270,7 @@ sudo systemctl status apiproxyd
 
 ```powershell
 # Clone repository
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 
 # Build
@@ -299,7 +299,7 @@ nssm start apiproxyd
 
 ```bash
 # Build image
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 docker build -t apiproxyd:latest .
 
@@ -508,5 +508,5 @@ rm ~/Library/LaunchAgents/com.afterdarktech.apiproxyd.plist
 ## Getting Help
 
 - **Documentation**: [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md)
-- **Issues**: https://github.com/afterdarktech/apiproxyd/issues
+- **Issues**: https://github.com/afterdarksys/apiproxyd/issues
 - **Support**: support@apiproxy.app

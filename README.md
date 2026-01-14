@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev/)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com/afterdarktech/apiproxyd)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-green)](https://github.com/afterdarksys/apiproxyd)
 
 A high-performance API caching daemon that enables businesses to deploy on-premises caching infrastructure for [api.apiproxy.app](https://api.apiproxy.app). Reduce API costs by up to 90% and improve response times from 200ms to under 5ms.
 
@@ -22,10 +22,10 @@ A high-performance API caching daemon that enables businesses to deploy on-premi
 
 ```bash
 # Using Go
-go install github.com/afterdarktech/apiproxyd@latest
+go install github.com/afterdarksys/apiproxyd@latest
 
 # Or clone and build
-git clone https://github.com/afterdarktech/apiproxyd.git
+git clone https://github.com/afterdarksys/apiproxyd.git
 cd apiproxyd
 make build
 
@@ -360,7 +360,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 - **Documentation**: [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYMENT.md](DEPLOYMENT.md), [INSTALL.md](INSTALL.md)
-- **Issues**: [GitHub Issues](https://github.com/afterdarktech/apiproxyd/issues)
+- **Issues**: [GitHub Issues](https://github.com/afterdarksys/apiproxyd/issues)
 - **Main Site**: [api.apiproxy.app](https://api.apiproxy.app)
 
 ## Roadmap

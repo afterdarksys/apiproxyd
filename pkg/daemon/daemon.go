@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/afterdarktech/apiproxyd/pkg/cache"
-	"github.com/afterdarktech/apiproxyd/pkg/client"
-	"github.com/afterdarktech/apiproxyd/pkg/config"
+	"github.com/afterdarksys/apiproxyd/pkg/cache"
+	"github.com/afterdarksys/apiproxyd/pkg/client"
+	"github.com/afterdarksys/apiproxyd/pkg/config"
 )
 
 type Daemon struct {

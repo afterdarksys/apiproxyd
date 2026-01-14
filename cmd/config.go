@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/afterdarktech/apiproxyd/pkg/config"
+	"github.com/afterdarksys/apiproxyd/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"

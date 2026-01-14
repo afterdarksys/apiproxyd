@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/afterdarktech/apiproxyd/pkg/daemon"
+	"github.com/afterdarksys/apiproxyd/pkg/daemon"
 	"github.com/spf13/cobra"
 )
 

@@ -1,4 +1,4 @@
-module github.com/afterdarktech/apiproxyd
+module github.com/afterdarksys/apiproxyd
 
 go 1.21
 

@@ -156,7 +156,7 @@ apiproxyd/
 
 2. **Go Install**
    ```bash
-   go install github.com/afterdarktech/apiproxyd@latest
+   go install github.com/afterdarksys/apiproxyd@latest
    ```
 
 3. **Makefile**
@@ -293,7 +293,7 @@ MIT License - see [LICENSE](LICENSE) file
 
 ## Support
 
-- **Issues**: https://github.com/afterdarktech/apiproxyd/issues
+- **Issues**: https://github.com/afterdarksys/apiproxyd/issues
 - **Documentation**: See docs directory
 - **Main Site**: https://api.apiproxy.app
 

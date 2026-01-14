@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/afterdarktech/apiproxyd/cmd"
+	"github.com/afterdarksys/apiproxyd/cmd"
 )
 
 var (
