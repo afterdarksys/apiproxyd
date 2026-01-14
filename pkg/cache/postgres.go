@@ -25,6 +25,49 @@ func NewPostgres(dsn string) (*PostgresCache, error) {
 		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
 
+	// Configure connection pool for PostgreSQL
+	// PostgreSQL handles concurrency well, so we can have more connections
+	db.SetMaxOpenConns(25)       // Max concurrent connections
+	db.SetMaxIdleConns(5)        // Keep connections warm for reuse
+	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
+	db.SetConnMaxIdleTime(1 * time.Minute) // Close idle connections
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
+	}
+
+	// Initialize schema
+	if err := initPostgresSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+	}
+
+	return &PostgresCache{
+		db:  db,
+		dsn: dsn,
+		ttl: 24 * time.Hour,
+	}, nil
+}
+
+// NewPostgresWithConfig creates a Postgres cache with custom connection pool settings
+func NewPostgresWithConfig(dsn string, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*PostgresCache, error) {
+	if dsn == "" {
+		return nil, fmt.Errorf("PostgreSQL DSN is required")
+	}
+
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+
+	// Apply custom pool configuration
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(maxLifetime)
+	db.SetConnMaxIdleTime(maxIdleTime)
+
 	// Test connection
 	if err := db.Ping(); err != nil {
 		db.Close()

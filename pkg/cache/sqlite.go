@@ -32,9 +32,24 @@ func NewSQLite(path string) (*SQLiteCache, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", path)
+	// Use connection pooling optimizations for SQLite
+	// Note: SQLite supports only 1 writer at a time, but multiple concurrent readers
+	db, err := sql.Open("sqlite3", path+"?cache=shared&mode=rwc&_journal_mode=WAL")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Configure connection pool for SQLite
+	// SQLite performs best with limited connections due to write serialization
+	db.SetMaxOpenConns(10)        // Limit concurrent connections
+	db.SetMaxIdleConns(5)         // Keep some connections warm
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	// Initialize schema
@@ -48,6 +63,22 @@ func NewSQLite(path string) (*SQLiteCache, error) {
 		path: path,
 		ttl:  24 * time.Hour, // Default 24 hour TTL
 	}, nil
+}
+
+// NewSQLiteWithConfig creates a SQLite cache with custom connection pool settings
+func NewSQLiteWithConfig(path string, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*SQLiteCache, error) {
+	cache, err := NewSQLite(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply custom pool configuration
+	cache.db.SetMaxOpenConns(maxOpen)
+	cache.db.SetMaxIdleConns(maxIdle)
+	cache.db.SetConnMaxLifetime(maxLifetime)
+	cache.db.SetConnMaxIdleTime(maxIdleTime)
+
+	return cache, nil
 }
 
 func initSQLiteSchema(db *sql.DB) error {
