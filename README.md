@@ -13,8 +13,11 @@ A high-performance API caching daemon that enables businesses to deploy on-premi
 - 🔒 **Secure** - API key authentication, whitelisted endpoints, encrypted storage
 - 📴 **Offline Mode** - Continue serving cached responses without internet connectivity
 - 🛠️ **Easy Deployment** - Single binary, Docker support, systemd integration
-- 📊 **Monitoring** - Built-in health checks, cache statistics, and metrics
+- 📊 **Monitoring** - Built-in health checks, cache statistics, Prometheus metrics
 - 🔧 **Flexible Configuration** - JSON/YAML config, environment variables, CLI flags
+- 🔌 **Plugin System** - Extend with Go or Python plugins for custom API integrations
+- 🗜️ **Response Compression** - Automatic gzip compression for responses >1KB
+- 🎛️ **Web Admin UI** - Real-time debugging interface (available as plugin)
 
 ## Quick Start
 
@@ -241,6 +244,76 @@ docker run -p 9002:9002 \
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide.
 
+## Plugin System
+
+apiproxyd supports a powerful plugin system that allows you to integrate any third-party API or add custom functionality. Plugins can intercept and modify requests/responses at various stages of the proxy pipeline.
+
+### Plugin Types
+
+- **Go Plugins** - Compiled as shared libraries (.so), high performance, loaded in-process
+- **Python Plugins** - Executed as subprocesses, easy to develop, slower than Go
+
+### Plugin Use Cases
+
+The plugin system enables powerful integrations:
+
+- ✅ **Route to Custom APIs** - Integrate Stripe, Twilio, OpenAI, AWS services, etc.
+- ✅ **Add Authentication** - Manage API keys and auth tokens for third-party services
+- ✅ **Transform Data** - Convert between formats (XML/JSON), modify payloads
+- ✅ **Rate Limiting** - Implement per-key quotas and rate limits
+- ✅ **Logging & Monitoring** - Track usage, costs, and performance metrics
+- ✅ **Cost Tracking** - Monitor API usage costs across different services
+
+### Quick Example
+
+Add plugins to your `config.json`:
+
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "plugins": [
+      {
+        "name": "custom_router",
+        "type": "go",
+        "path": "~/.apiproxy/plugins/go/custom_router.so",
+        "enabled": true,
+        "config": {
+          "routes": {
+            "/v1/stripe/*": "https://api.stripe.com",
+            "/v1/openai/*": "https://api.openai.com"
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+Now requests to `/v1/stripe/*` will be routed to Stripe's API with full caching support!
+
+### Example Plugins
+
+We provide several example plugins:
+
+1. **Logger Plugin** (Go/Python) - Logs all requests and responses
+2. **Custom Router** (Go) - Routes requests to external APIs by pattern
+3. **OpenAI Adapter** (Python) - Integrates OpenAI API with cost tracking
+4. **Web Admin UI** (Go) - Real-time debugging dashboard on port 9003
+
+### Building Plugins
+
+```bash
+# Build all example plugins
+cd examples/plugins
+make all
+
+# Install to system location
+make install
+```
+
+See [examples/plugins/README.md](examples/plugins/README.md) for detailed plugin documentation and development guide.
+
 ## Performance Benchmarks
 
 ### Cache Performance (SQLite)
@@ -304,6 +377,32 @@ Response:
 }
 ```
 
+### Prometheus Metrics
+```bash
+curl http://localhost:9002/metrics
+```
+
+Exports metrics in Prometheus format:
+- `apiproxyd_requests_total` - Total requests processed
+- `apiproxyd_cache_hits_total` - Cache hit count
+- `apiproxyd_cache_misses_total` - Cache miss count
+- `apiproxyd_bytes_transferred_total` - Total bytes transferred
+- `apiproxyd_requests_by_method` - Requests grouped by HTTP method
+- `apiproxyd_requests_by_status` - Requests grouped by status code
+
+### Web Admin UI
+Enable the web admin plugin to access a real-time debugging interface:
+
+```bash
+# Visit http://localhost:9003 after enabling the plugin
+```
+
+Features:
+- Real-time request/response inspection
+- Live statistics dashboard
+- Cache hit/miss tracking
+- Response time monitoring
+
 ## Troubleshooting
 
 ### Daemon won't start
@@ -365,14 +464,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Roadmap
 
-- [ ] Prometheus metrics exporter
+- [x] Plugin system (Go and Python)
+- [x] Custom API routing via plugins
+- [x] Prometheus metrics exporter
+- [x] Response compression (gzip)
+- [x] Web admin UI for debugging
 - [ ] Grafana dashboard templates
 - [ ] Kubernetes Helm charts
 - [ ] Cache warming functionality
 - [ ] Intelligent TTL adjustment
-- [ ] Response compression
 - [ ] Multi-tenancy support
-- [ ] Web UI for management
+- [ ] Plugin marketplace/registry
 
 ## Related Projects
 

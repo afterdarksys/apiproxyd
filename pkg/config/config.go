@@ -25,6 +25,19 @@ type CacheConfig struct {
 	PostgresDSN string `yaml:"postgres_dsn,omitempty" json:"postgres_dsn,omitempty"`
 }
 
+type PluginConfig struct {
+	Enabled bool           `yaml:"enabled" json:"enabled"`
+	Plugins []PluginEntry  `yaml:"plugins" json:"plugins"`
+}
+
+type PluginEntry struct {
+	Name    string                 `yaml:"name" json:"name"`
+	Type    string                 `yaml:"type" json:"type"` // "go" or "python"
+	Path    string                 `yaml:"path" json:"path"`
+	Enabled bool                   `yaml:"enabled" json:"enabled"`
+	Config  map[string]interface{} `yaml:"config,omitempty" json:"config,omitempty"`
+}
+
 type Config struct {
 	// Server configuration
 	Server ServerConfig `yaml:"server" json:"server"`
@@ -35,6 +48,9 @@ type Config struct {
 
 	// Cache configuration
 	Cache CacheConfig `yaml:"cache" json:"cache"`
+
+	// Plugin configuration
+	Plugins PluginConfig `yaml:"plugins,omitempty" json:"plugins,omitempty"`
 
 	// Offline endpoints - cached indefinitely, work without internet
 	OfflineEndpoints []string `yaml:"offline_endpoints" json:"offline_endpoints"`

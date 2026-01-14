@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,15 +19,19 @@ import (
 	"github.com/afterdarksys/apiproxyd/pkg/cache"
 	"github.com/afterdarksys/apiproxyd/pkg/client"
 	"github.com/afterdarksys/apiproxyd/pkg/config"
+	"github.com/afterdarksys/apiproxyd/pkg/metrics"
+	"github.com/afterdarksys/apiproxyd/pkg/plugin"
 )
 
 type Daemon struct {
-	host   string
-	port   int
-	server *http.Server
-	cache  cache.Cache
-	client *client.Client
-	cfg    *config.Config
+	host          string
+	port          int
+	server        *http.Server
+	cache         cache.Cache
+	client        *client.Client
+	cfg           *config.Config
+	pluginManager *plugin.Manager
+	metrics       *metrics.PrometheusMetrics
 }
 
 func New(host string, port int) *Daemon {
@@ -70,12 +75,35 @@ func (d *Daemon) Start() error {
 		d.client.BaseURL = cfg.EntryPoint
 	}
 
+	// Initialize plugin manager
+	pluginCfg := &plugin.Config{
+		Enabled: cfg.Plugins.Enabled,
+		Plugins: make([]plugin.PluginConfig, len(cfg.Plugins.Plugins)),
+	}
+	for i, pe := range cfg.Plugins.Plugins {
+		pluginCfg.Plugins[i] = plugin.PluginConfig{
+			Name:    pe.Name,
+			Type:    pe.Type,
+			Path:    pe.Path,
+			Enabled: pe.Enabled,
+			Config:  pe.Config,
+		}
+	}
+	d.pluginManager = plugin.NewManager(pluginCfg)
+	if err := d.pluginManager.LoadPlugins(); err != nil {
+		return fmt.Errorf("failed to load plugins: %w", err)
+	}
+
+	// Initialize metrics
+	d.metrics = metrics.NewPrometheusMetrics()
+
 	// Create HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.handleHealth)
 	mux.HandleFunc("/api/", d.handleProxy)
 	mux.HandleFunc("/cache/stats", d.handleCacheStats)
 	mux.HandleFunc("/cache/clear", d.handleCacheClear)
+	mux.HandleFunc("/metrics", d.metrics.ServeHTTP)
 
 	d.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", d.host, d.port),
@@ -114,6 +142,9 @@ func (d *Daemon) Start() error {
 	}
 
 	d.cache.Close()
+	if d.pluginManager != nil {
+		d.pluginManager.Shutdown()
+	}
 	d.removePIDFile()
 
 	fmt.Println("✅ Daemon stopped")
@@ -204,6 +235,9 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
 	// Extract endpoint path (remove /api prefix)
 	endpoint := strings.TrimPrefix(r.URL.Path, "/api")
 
@@ -213,22 +247,67 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate cache key
+	// Read body
 	body, _ := io.ReadAll(r.Body)
 	r.Body.Close()
-	cacheKey := cache.GenerateKey(r.Method, endpoint, string(body))
+
+	// Create plugin request
+	pluginReq := plugin.FromHTTPRequest(r, body)
+	pluginReq.Endpoint = endpoint
+
+	// Call plugin OnRequest hooks
+	if d.pluginManager != nil {
+		modifiedReq, cont, err := d.pluginManager.OnRequest(ctx, pluginReq)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Plugin error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if !cont {
+			// Plugin stopped the request, return early
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		pluginReq = modifiedReq
+		// Update endpoint and body in case plugins modified them
+		endpoint = pluginReq.Endpoint
+		body = pluginReq.Body
+	}
+
+	// Generate cache key
+	cacheKey := cache.GenerateKey(pluginReq.Method, endpoint, string(body))
 
 	// Check if this is an offline endpoint
 	isOffline := d.cfg.IsEndpointOffline(endpoint)
 
 	// Try cache first
 	if cached, err := d.cache.Get(cacheKey); err == nil {
+		pluginResp := &plugin.Response{
+			StatusCode: http.StatusOK,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       cached,
+			Cached:     true,
+		}
+
+		// Call plugin OnCacheHit hooks
+		if d.pluginManager != nil {
+			modifiedResp, err := d.pluginManager.OnCacheHit(ctx, pluginReq, pluginResp)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Plugin error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			pluginResp = modifiedResp
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "HIT")
 		if isOffline {
 			w.Header().Set("X-Offline", "true")
 		}
-		w.Write(cached)
+		for k, v := range pluginResp.Headers {
+			w.Header().Set(k, v)
+		}
+		d.writeResponse(w, r, pluginResp.Body, startTime, true)
+		d.metrics.RecordRequest(r.Method, http.StatusOK, time.Since(startTime), true, int64(len(pluginResp.Body)))
 		return
 	}
 
@@ -246,24 +325,57 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Make request to API
 	headers := make(map[string]string)
-	for k, v := range r.Header {
-		if len(v) > 0 {
-			headers[k] = v[0]
-		}
+	for k, v := range pluginReq.Headers {
+		headers[k] = v
 	}
 
-	resp, err := d.client.Request(r.Method, endpoint, bytes.NewReader(body), headers)
+	resp, err := d.client.Request(pluginReq.Method, endpoint, bytes.NewReader(body), headers)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
+	// Create plugin response
+	pluginResp := &plugin.Response{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       resp,
+		Cached:     false,
+	}
+
+	// Call plugin OnResponse hooks
+	if d.pluginManager != nil {
+		modifiedResp, err := d.pluginManager.OnResponse(ctx, pluginReq, pluginResp)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Plugin error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		pluginResp = modifiedResp
+	}
+
 	// Cache response (with longer TTL for offline endpoints)
-	d.cache.Set(cacheKey, resp)
+	d.cache.Set(cacheKey, pluginResp.Body)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache", "MISS")
-	w.Write(resp)
+	for k, v := range pluginResp.Headers {
+		w.Header().Set(k, v)
+	}
+	d.writeResponse(w, r, pluginResp.Body, startTime, false)
+	d.metrics.RecordRequest(r.Method, http.StatusOK, time.Since(startTime), false, int64(len(pluginResp.Body)))
+}
+
+// writeResponse writes response with optional gzip compression
+func (d *Daemon) writeResponse(w http.ResponseWriter, r *http.Request, data []byte, startTime time.Time, cached bool) {
+	// Check if client accepts gzip
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && len(data) > 1024 {
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		gz.Write(data)
+	} else {
+		w.Write(data)
+	}
 }
 
 func (d *Daemon) handleCacheStats(w http.ResponseWriter, r *http.Request) {

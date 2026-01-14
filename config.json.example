@@ -13,6 +13,47 @@
     "ttl": 86400,
     "postgres_dsn": ""
   },
+  "plugins": {
+    "enabled": false,
+    "plugins": [
+      {
+        "name": "logger",
+        "type": "go",
+        "path": "~/.apiproxy/plugins/go/logger.so",
+        "enabled": true,
+        "config": {}
+      },
+      {
+        "name": "custom_router",
+        "type": "go",
+        "path": "~/.apiproxy/plugins/go/custom_router.so",
+        "enabled": true,
+        "config": {
+          "routes": {
+            "/v1/stripe/*": "https://api.stripe.com",
+            "/v1/twilio/*": "https://api.twilio.com",
+            "/v1/openai/*": "https://api.openai.com"
+          }
+        }
+      },
+      {
+        "name": "python_logger",
+        "type": "python",
+        "path": "~/.apiproxy/plugins/python/logger.py",
+        "enabled": false,
+        "config": {}
+      },
+      {
+        "name": "openai_adapter",
+        "type": "python",
+        "path": "~/.apiproxy/plugins/python/openai_adapter.py",
+        "enabled": false,
+        "config": {
+          "openai_api_key": "sk-your-openai-key-here"
+        }
+      }
+    ]
+  },
   "offline_endpoints": [
     "/v1/darkapi/ip/*",
     "/v1/nerdapi/hash",
@@ -25,6 +66,10 @@
     "/v1/nerdapi/*",
     "/v1/computeapi/*",
     "/v1/systemapi/*",
-    "/v1/ipapi/*"
+    "/v1/ipapi/*",
+    "/v1/stripe/*",
+    "/v1/twilio/*",
+    "/v1/openai/*",
+    "/v1/custom/*"
   ]
 }
