@@ -34,17 +34,21 @@ type CacheConfig struct {
 	MemoryCacheEnabled bool `yaml:"memory_cache_enabled" json:"memory_cache_enabled"`
 	MemoryCacheSize    int  `yaml:"memory_cache_size" json:"memory_cache_size"` // number of entries
 	// Database connection pooling
-	MaxOpenConns    int `yaml:"max_open_conns" json:"max_open_conns"`       // max open connections
-	MaxIdleConns    int `yaml:"max_idle_conns" json:"max_idle_conns"`       // max idle connections
-	ConnMaxLifetime int `yaml:"conn_max_lifetime" json:"conn_max_lifetime"` // seconds
+	MaxOpenConns    int `yaml:"max_open_conns" json:"max_open_conns"`         // max open connections
+	MaxIdleConns    int `yaml:"max_idle_conns" json:"max_idle_conns"`         // max idle connections
+	ConnMaxLifetime int `yaml:"conn_max_lifetime" json:"conn_max_lifetime"`   // seconds
 	ConnMaxIdleTime int `yaml:"conn_max_idle_time" json:"conn_max_idle_time"` // seconds
 	// Background cleanup
 	CleanupInterval int `yaml:"cleanup_interval" json:"cleanup_interval"` // seconds
+	// Advanced caching
+	StaleIfError          bool `yaml:"stale_if_error" json:"stale_if_error"`
+	StaleTTL              int  `yaml:"stale_ttl" json:"stale_ttl"` // seconds
+	SemanticDeduplication bool `yaml:"semantic_deduplication" json:"semantic_deduplication"`
 }
 
 type PluginConfig struct {
-	Enabled bool           `yaml:"enabled" json:"enabled"`
-	Plugins []PluginEntry  `yaml:"plugins" json:"plugins"`
+	Enabled bool          `yaml:"enabled" json:"enabled"`
+	Plugins []PluginEntry `yaml:"plugins" json:"plugins"`
 }
 
 type PluginEntry struct {
@@ -58,10 +62,10 @@ type PluginEntry struct {
 // SecurityConfig holds security-related settings
 type SecurityConfig struct {
 	// Rate limiting
-	RateLimitEnabled     bool `yaml:"rate_limit_enabled" json:"rate_limit_enabled"`
-	RateLimitPerIP       int  `yaml:"rate_limit_per_ip" json:"rate_limit_per_ip"`           // requests per minute
-	RateLimitPerKey      int  `yaml:"rate_limit_per_key" json:"rate_limit_per_key"`         // requests per minute
-	RateLimitBurst       int  `yaml:"rate_limit_burst" json:"rate_limit_burst"`             // burst size
+	RateLimitEnabled bool `yaml:"rate_limit_enabled" json:"rate_limit_enabled"`
+	RateLimitPerIP   int  `yaml:"rate_limit_per_ip" json:"rate_limit_per_ip"`   // requests per minute
+	RateLimitPerKey  int  `yaml:"rate_limit_per_key" json:"rate_limit_per_key"` // requests per minute
+	RateLimitBurst   int  `yaml:"rate_limit_burst" json:"rate_limit_burst"`     // burst size
 	// Request/response size limits
 	MaxRequestBodySize  int64 `yaml:"max_request_body_size" json:"max_request_body_size"`   // bytes
 	MaxResponseBodySize int64 `yaml:"max_response_body_size" json:"max_response_body_size"` // bytes
@@ -77,21 +81,38 @@ type SecurityConfig struct {
 // ClientConfig holds HTTP client configuration
 type ClientConfig struct {
 	// Timeouts
-	RequestTimeout  int `yaml:"request_timeout" json:"request_timeout"`   // seconds
-	DialTimeout     int `yaml:"dial_timeout" json:"dial_timeout"`         // seconds
-	KeepAlive       int `yaml:"keep_alive" json:"keep_alive"`             // seconds
+	RequestTimeout int `yaml:"request_timeout" json:"request_timeout"` // seconds
+	DialTimeout    int `yaml:"dial_timeout" json:"dial_timeout"`       // seconds
+	KeepAlive      int `yaml:"keep_alive" json:"keep_alive"`           // seconds
 	// Connection pooling
 	MaxIdleConns        int `yaml:"max_idle_conns" json:"max_idle_conns"`
 	MaxIdleConnsPerHost int `yaml:"max_idle_conns_per_host" json:"max_idle_conns_per_host"`
 	MaxConnsPerHost     int `yaml:"max_conns_per_host" json:"max_conns_per_host"`
 	IdleConnTimeout     int `yaml:"idle_conn_timeout" json:"idle_conn_timeout"` // seconds
 	// Circuit breaker
-	CircuitBreakerEnabled    bool `yaml:"circuit_breaker_enabled" json:"circuit_breaker_enabled"`
-	CircuitBreakerThreshold  int  `yaml:"circuit_breaker_threshold" json:"circuit_breaker_threshold"`   // consecutive failures
-	CircuitBreakerTimeout    int  `yaml:"circuit_breaker_timeout" json:"circuit_breaker_timeout"`       // seconds
-	CircuitBreakerHalfOpen   int  `yaml:"circuit_breaker_half_open" json:"circuit_breaker_half_open"`   // max requests in half-open
+	CircuitBreakerEnabled   bool `yaml:"circuit_breaker_enabled" json:"circuit_breaker_enabled"`
+	CircuitBreakerThreshold int  `yaml:"circuit_breaker_threshold" json:"circuit_breaker_threshold"` // consecutive failures
+	CircuitBreakerTimeout   int  `yaml:"circuit_breaker_timeout" json:"circuit_breaker_timeout"`     // seconds
+	CircuitBreakerHalfOpen  int  `yaml:"circuit_breaker_half_open" json:"circuit_breaker_half_open"` // max requests in half-open
 	// Request deduplication
 	DeduplicationEnabled bool `yaml:"deduplication_enabled" json:"deduplication_enabled"`
+}
+
+// QueueConfig holds configuration for the task queue
+type QueueConfig struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	Backend   string `yaml:"backend" json:"backend"`       // "river" or "asynq"
+	RedisAddr string `yaml:"redis_addr" json:"redis_addr"` // Used for asynq
+	Workers   int    `yaml:"workers" json:"workers"`
+}
+
+// ClusterConfig holds configuration for gRPC clustering
+type ClusterConfig struct {
+	Enabled   bool     `yaml:"enabled" json:"enabled"`
+	NodeID    string   `yaml:"node_id" json:"node_id"`
+	Port      int      `yaml:"port" json:"port"`
+	Peers     []string `yaml:"peers" json:"peers"`         // List of "host:port" peer addresses
+	Broadcast bool     `yaml:"broadcast" json:"broadcast"` // Broadcast invalidations to peers
 }
 
 type Config struct {
@@ -113,6 +134,12 @@ type Config struct {
 
 	// Client configuration
 	Client ClientConfig `yaml:"client,omitempty" json:"client,omitempty"`
+
+	// Queue configuration
+	Queue QueueConfig `yaml:"queue,omitempty" json:"queue,omitempty"`
+
+	// Cluster configuration
+	Cluster ClusterConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
 
 	// Offline endpoints - cached indefinitely, work without internet
 	OfflineEndpoints []string `yaml:"offline_endpoints" json:"offline_endpoints"`
@@ -149,42 +176,58 @@ func Default() *Config {
 		},
 		EntryPoint: "https://api.apiproxy.app",
 		Cache: CacheConfig{
-			Backend:            "sqlite",
-			Path:               filepath.Join(home, ".apiproxy", "cache.db"),
-			TTL:                86400, // 24 hours
-			MemoryCacheEnabled: true,
-			MemoryCacheSize:    1000,
-			MaxOpenConns:       25,
-			MaxIdleConns:       5,
-			ConnMaxLifetime:    300,  // 5 minutes
-			ConnMaxIdleTime:    60,   // 1 minute
-			CleanupInterval:    3600, // 1 hour
+			Backend:               "sqlite",
+			Path:                  filepath.Join(home, ".apiproxy", "cache.db"),
+			TTL:                   86400, // 24 hours
+			MemoryCacheEnabled:    true,
+			MemoryCacheSize:       1000,
+			MaxOpenConns:          25,
+			MaxIdleConns:          5,
+			ConnMaxLifetime:       300,  // 5 minutes
+			ConnMaxIdleTime:       60,   // 1 minute
+			CleanupInterval:       3600, // 1 hour
+			StaleIfError:          true,
+			StaleTTL:              172800, // 48 hours
+			SemanticDeduplication: true,
 		},
 		Security: SecurityConfig{
 			RateLimitEnabled:      true,
 			RateLimitPerIP:        60,  // 60 req/min per IP
 			RateLimitPerKey:       300, // 300 req/min per API key
 			RateLimitBurst:        10,
-			MaxRequestBodySize:    10 * 1024 * 1024,  // 10MB
-			MaxResponseBodySize:   50 * 1024 * 1024,  // 50MB
+			MaxRequestBodySize:    10 * 1024 * 1024, // 10MB
+			MaxResponseBodySize:   50 * 1024 * 1024, // 50MB
 			SSRFProtectionEnabled: true,
 			AllowedUpstreamHosts:  []string{"api.apiproxy.app"},
 			BlockPrivateIPs:       true,
 			MetricsAuthEnabled:    false,
 		},
 		Client: ClientConfig{
-			RequestTimeout:           30,
-			DialTimeout:              10,
-			KeepAlive:                30,
-			MaxIdleConns:             100,
-			MaxIdleConnsPerHost:      10,
-			MaxConnsPerHost:          100,
-			IdleConnTimeout:          90,
-			CircuitBreakerEnabled:    true,
-			CircuitBreakerThreshold:  5,
-			CircuitBreakerTimeout:    60,
-			CircuitBreakerHalfOpen:   3,
-			DeduplicationEnabled:     true,
+			RequestTimeout:          30,
+			DialTimeout:             10,
+			KeepAlive:               30,
+			MaxIdleConns:            100,
+			MaxIdleConnsPerHost:     10,
+			MaxConnsPerHost:         100,
+			IdleConnTimeout:         90,
+			CircuitBreakerEnabled:   true,
+			CircuitBreakerThreshold: 5,
+			CircuitBreakerTimeout:   60,
+			CircuitBreakerHalfOpen:  3,
+			DeduplicationEnabled:    true,
+		},
+		Queue: QueueConfig{
+			Enabled:   false,
+			Backend:   "river",
+			RedisAddr: "localhost:6379",
+			Workers:   10,
+		},
+		Cluster: ClusterConfig{
+			Enabled:   false,
+			NodeID:    "node-1",
+			Port:      9005,
+			Peers:     []string{},
+			Broadcast: true,
 		},
 		OfflineEndpoints: []string{
 			"/health",

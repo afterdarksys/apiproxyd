@@ -12,12 +12,13 @@ import (
 )
 
 type SQLiteCache struct {
-	db   *sql.DB
-	path string
-	ttl  time.Duration
+	db       *sql.DB
+	path     string
+	ttl      time.Duration
+	staleTTL time.Duration
 }
 
-func NewSQLite(path string) (*SQLiteCache, error) {
+func NewSQLite(path string, staleTTL time.Duration) (*SQLiteCache, error) {
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -41,8 +42,8 @@ func NewSQLite(path string) (*SQLiteCache, error) {
 
 	// Configure connection pool for SQLite
 	// SQLite performs best with limited connections due to write serialization
-	db.SetMaxOpenConns(10)        // Limit concurrent connections
-	db.SetMaxIdleConns(5)         // Keep some connections warm
+	db.SetMaxOpenConns(10) // Limit concurrent connections
+	db.SetMaxIdleConns(5)  // Keep some connections warm
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetConnMaxIdleTime(1 * time.Minute)
 
@@ -59,15 +60,16 @@ func NewSQLite(path string) (*SQLiteCache, error) {
 	}
 
 	return &SQLiteCache{
-		db:   db,
-		path: path,
-		ttl:  24 * time.Hour, // Default 24 hour TTL
+		db:       db,
+		path:     path,
+		ttl:      24 * time.Hour, // Default 24 hour TTL
+		staleTTL: staleTTL,
 	}, nil
 }
 
 // NewSQLiteWithConfig creates a SQLite cache with custom connection pool settings
-func NewSQLiteWithConfig(path string, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*SQLiteCache, error) {
-	cache, err := NewSQLite(path)
+func NewSQLiteWithConfig(path string, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*SQLiteCache, error) {
+	cache, err := NewSQLite(path, staleTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +125,30 @@ func (c *SQLiteCache) Get(key string) ([]byte, error) {
 
 	// Check if expired
 	if time.Now().After(expiresAt) {
-		c.Delete(key)
+		// Only delete if it's PAST the StaleTTL window
+		if time.Now().After(expiresAt.Add(c.staleTTL)) {
+			c.Delete(key)
+		}
 		return nil, fmt.Errorf("cache expired")
+	}
+
+	return value, nil
+}
+
+func (c *SQLiteCache) GetStale(key string) ([]byte, error) {
+	var value []byte
+
+	err := c.db.QueryRow(`
+		SELECT value
+		FROM cache_entries
+		WHERE key = ?
+	`, key).Scan(&value)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("cache miss")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cache entry: %w", err)
 	}
 
 	return value, nil
@@ -201,6 +225,7 @@ func (c *SQLiteCache) Close() error {
 
 // CleanupExpired removes all expired entries
 func (c *SQLiteCache) CleanupExpired() error {
-	_, err := c.db.Exec("DELETE FROM cache_entries WHERE expires_at <= ?", time.Now())
+	expireTime := time.Now().Add(-c.staleTTL)
+	_, err := c.db.Exec("DELETE FROM cache_entries WHERE expires_at <= ?", expireTime)
 	return err
 }

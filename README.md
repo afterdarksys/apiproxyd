@@ -10,14 +10,16 @@ A high-performance API caching daemon that enables businesses to deploy on-premi
 
 - 🚀 **High Performance** - Built in Go, handles 10K-100K cached requests/sec
 - 💾 **Dual Cache Backends** - SQLite for single-server, PostgreSQL for multi-server deployments
-- 🔒 **Secure** - API key authentication, whitelisted endpoints, encrypted storage
+- 🔒 **Secure** - API key authentication, LDAP/Active Directory, whitelisted endpoints, encrypted storage
 - 📴 **Offline Mode** - Continue serving cached responses without internet connectivity
 - 🛠️ **Easy Deployment** - Single binary, Docker support, systemd integration
 - 📊 **Monitoring** - Built-in health checks, cache statistics, Prometheus metrics
 - 🔧 **Flexible Configuration** - JSON/YAML config, environment variables, CLI flags
 - 🔌 **Plugin System** - Extend with Go or Python plugins for custom API integrations
+- 🌐 **Enterprise Integrations** - Infoblox NIOS/WAPI, BlueCat Address Manager, LDAP authentication
 - 🗜️ **Response Compression** - Automatic gzip compression for responses >1KB
 - 🎛️ **Web Admin UI** - Real-time debugging interface (available as plugin)
+- 🔐 **LDAP/AD Support** - Enterprise directory integration with connection pooling and caching
 
 ## Quick Start
 
@@ -160,6 +162,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
 ```bash
 apiproxy login                         # Interactive login
 apiproxy login --api-key apx_live_xxx  # Login with API key
+apiproxy login --oauth2                # Login via OAuth2 Device Flow
 ```
 
 ### Daemon Management
@@ -292,14 +295,29 @@ Add plugins to your `config.json`:
 
 Now requests to `/v1/stripe/*` will be routed to Stripe's API with full caching support!
 
-### Example Plugins
+### Official Plugins
 
-We provide several example plugins:
+We provide several production-ready plugins:
 
-1. **Logger Plugin** (Go/Python) - Logs all requests and responses
-2. **Custom Router** (Go) - Routes requests to external APIs by pattern
-3. **OpenAI Adapter** (Python) - Integrates OpenAI API with cost tracking
-4. **Web Admin UI** (Go) - Real-time debugging dashboard on port 9003
+1. **Infoblox Plugin** (Go) - Complete NIOS/WAPI API caching with intelligent TTLs
+   - Network objects: 1h, DNS records: 5m, DHCP: 2m, Grid config: 30m
+   - Identity-independent caching, automatic mutation detection
+2. **BlueCat Plugin** (Go) - Address Manager (BAM/BDDS) API caching
+   - Config objects: 1h, DNS: 5m, DHCP: 2m, Searches: 10m, Deployment: 30s
+   - Full support for BAM REST API operations
+3. **LDAP Authentication** (Go Middleware) - Enterprise directory integration
+   - Connection pooling, TLS/SSL, group membership validation
+   - Authentication result caching for performance
+4. **Logger Plugin** (Go/Python) - Logs all requests and responses
+5. **Custom Router** (Go) - Routes requests to external APIs by pattern
+6. **OpenAI Adapter** (Python) - Integrates OpenAI API with cost tracking
+7. **Web Admin UI** (Go) - Real-time debugging dashboard on port 9003
+8. **AWS SigV4 Proxy** (Go) - Strips signatures for identity-aware proxying
+9. **Docker Registry** (Go) - Intercepts manifest/blob fetches for OCI caching
+10. **Cloudflare ETag** (Go) - Automatic If-None-Match tracking and TTL updating
+11. **Vercel API** (Go) - Query normalization for Analytics APIs
+12. **Dartnode API** (Go) - Identity token normalization for cache sharing
+13. **Kubernetes Cache** (Go) - In-memory materialized views for Kubernetes resources
 
 ### Building Plugins
 
@@ -310,9 +328,17 @@ make all
 
 # Install to system location
 make install
+
+# Build Infoblox plugin
+cd examples/plugins/go/infoblox
+go build -buildmode=plugin -o infoblox.so infoblox.go
+
+# Build BlueCat plugin
+cd examples/plugins/go/bluecat
+go build -buildmode=plugin -o bluecat.so bluecat.go
 ```
 
-See [examples/plugins/README.md](examples/plugins/README.md) for detailed plugin documentation and development guide.
+See [PLUGINS_README.md](PLUGINS_README.md) for comprehensive plugin documentation, development guide, and configuration examples.
 
 ## Performance Benchmarks
 
@@ -458,9 +484,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- **Documentation**: [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYMENT.md](DEPLOYMENT.md), [INSTALL.md](INSTALL.md)
+- **Documentation**:
+  - [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design
+  - [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment guide
+  - [INSTALL.md](INSTALL.md) - Installation instructions
+  - [PLUGINS_README.md](PLUGINS_README.md) - Plugin development guide
+  - [CHANGELOG.md](CHANGELOG.md) - Version history
+  - [IMPLEMENTATION_SUMMARY_2026.md](IMPLEMENTATION_SUMMARY_2026.md) - Complete feature summary
 - **Issues**: [GitHub Issues](https://github.com/afterdarksys/apiproxyd/issues)
 - **Main Site**: [api.apiproxy.app](https://api.apiproxy.app)
+- **Email Support**: support@apiproxy.app
 
 ## Roadmap
 
@@ -469,10 +502,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Prometheus metrics exporter
 - [x] Response compression (gzip)
 - [x] Web admin UI for debugging
+- [x] Infoblox NIOS/WAPI integration
+- [x] BlueCat Address Manager integration
+- [x] LDAP/Active Directory authentication
+- [x] gRPC distributed caching
 - [ ] Grafana dashboard templates
 - [ ] Kubernetes Helm charts
-- [ ] Cache warming functionality
-- [ ] Intelligent TTL adjustment
+- [ ] Cache warming functionality (partial)
+- [ ] Intelligent TTL adjustment (plugin-based)
 - [ ] Multi-tenancy support
 - [ ] Plugin marketplace/registry
 

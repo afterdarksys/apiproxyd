@@ -12,6 +12,8 @@ import (
 
 type Client struct {
 	APIKey         string
+	OAuthToken     string
+	AuthType       string // "Bearer" or "APIKey"
 	BaseURL        string
 	HTTPClient     *http.Client
 	circuitBreaker *CircuitBreaker
@@ -73,6 +75,11 @@ func New(apiKey string) *Client {
 
 // NewWithConfig creates a new client with custom configuration
 func NewWithConfig(apiKey string, cfg *ClientConfig) *Client {
+	return NewWithAuth(apiKey, "APIKey", cfg)
+}
+
+// NewWithAuth creates a new client with arbitrary auth
+func NewWithAuth(authValue, authType string, cfg *ClientConfig) *Client {
 	// Create custom transport with connection pooling
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
@@ -102,12 +109,19 @@ func NewWithConfig(apiKey string, cfg *ClientConfig) *Client {
 	}
 
 	client := &Client{
-		APIKey:  apiKey,
-		BaseURL: "https://api.apiproxy.app",
-		HTTPClient: &http.Client{
-			Timeout:   cfg.RequestTimeout,
-			Transport: transport,
-		},
+		BaseURL:  "https://api.apiproxy.app",
+		AuthType: authType,
+	}
+
+	if authType == "Bearer" {
+		client.OAuthToken = authValue
+	} else {
+		client.APIKey = authValue
+	}
+
+	client.HTTPClient = &http.Client{
+		Timeout:   cfg.RequestTimeout,
+		Transport: transport,
 	}
 
 	// Enable circuit breaker if configured
@@ -134,7 +148,11 @@ func (c *Client) ValidateKey() (*KeyInfo, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", c.APIKey)
+	if c.AuthType == "Bearer" {
+		req.Header.Set("Authorization", "Bearer "+c.OAuthToken)
+	} else {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -197,7 +215,11 @@ func (c *Client) executeRequest(method, url string, body io.Reader, headers map[
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", c.APIKey)
+	if c.AuthType == "Bearer" {
+		req.Header.Set("Authorization", "Bearer "+c.OAuthToken)
+	} else {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip") // Enable compression
 

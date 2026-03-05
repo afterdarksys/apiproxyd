@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package cluster;
+
+option go_package = "github.com/afterdarksys/apiproxyd/api/proto";
+
+// ClusterService defines the methods nodes use to communicate
+service ClusterService {
+  // HealthCheck verifies the node is active
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // InvalidateCache signals a node to evict a specific cache key
+  rpc InvalidateCache (InvalidateCacheRequest) returns (InvalidateCacheResponse);
+  
+  // BroadcastCacheLookup allows L2 lookup sharing (optional advanced feature)
+  rpc CacheLookup (CacheLookupRequest) returns (CacheLookupResponse);
+}
+
+message HealthCheckRequest {
+  string node_id = 1;
+}
+
+message HealthCheckResponse {
+  string status = 1;
+  int64 uptime = 2;
+  int32 cache_count = 3;
+}
+
+message InvalidateCacheRequest {
+  string key = 1;
+  string original_node = 2; // For preventing loops
+}
+
+message InvalidateCacheResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CacheLookupRequest {
+  string key = 1;
+}
+
+message CacheLookupResponse {
+  bool found = 1;
+  bytes payload = 2;
+}

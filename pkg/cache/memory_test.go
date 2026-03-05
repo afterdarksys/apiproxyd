@@ -6,10 +6,10 @@ import (
 )
 
 func TestMemoryCache(t *testing.T) {
-	cache := NewMemoryCache(3)
+	cache := NewMemoryCache(3, 1*time.Millisecond, 24*time.Hour)
 
 	// Test Set and Get
-	err := cache.Set("key1", []byte("value1"), 1*time.Hour)
+	err := cache.Set("key1", []byte("value1"))
 	if err != nil {
 		t.Fatalf("Failed to set: %v", err)
 	}
@@ -29,9 +29,9 @@ func TestMemoryCache(t *testing.T) {
 	}
 
 	// Test LRU eviction
-	cache.Set("key2", []byte("value2"), 1*time.Hour)
-	cache.Set("key3", []byte("value3"), 1*time.Hour)
-	cache.Set("key4", []byte("value4"), 1*time.Hour) // Should evict key1
+	cache.Set("key2", []byte("value2"))
+	cache.Set("key3", []byte("value3"))
+	cache.Set("key4", []byte("value4")) // Should evict key1
 
 	_, err = cache.Get("key1")
 	if err == nil {
@@ -39,13 +39,13 @@ func TestMemoryCache(t *testing.T) {
 	}
 
 	// Test stats
-	stats := cache.Stats()
+	stats, _ := cache.Stats()
 	if stats.Entries != 3 {
 		t.Errorf("Expected 3 entries, got %d", stats.Entries)
 	}
 
 	// Test expiration
-	cache.Set("expires", []byte("soon"), 1*time.Millisecond)
+	cache.Set("expires", []byte("soon"))
 	time.Sleep(10 * time.Millisecond)
 	_, err = cache.Get("expires")
 	if err == nil {
@@ -54,11 +54,11 @@ func TestMemoryCache(t *testing.T) {
 }
 
 func TestMemoryCacheHitRate(t *testing.T) {
-	cache := NewMemoryCache(10)
+	cache := NewMemoryCache(10, 1*time.Hour, 24*time.Hour)
 
 	// Generate hits and misses
 	for i := 0; i < 10; i++ {
-		cache.Set("key", []byte("value"), 1*time.Hour)
+		cache.Set("key", []byte("value"))
 	}
 
 	for i := 0; i < 10; i++ {
@@ -69,7 +69,7 @@ func TestMemoryCacheHitRate(t *testing.T) {
 		cache.Get("miss") // misses
 	}
 
-	stats := cache.Stats()
+	stats, _ := cache.Stats()
 	expectedHitRate := 10.0 / 15.0
 	if stats.HitRate < expectedHitRate-0.01 || stats.HitRate > expectedHitRate+0.01 {
 		t.Errorf("Expected hit rate ~%.2f, got %.2f", expectedHitRate, stats.HitRate)
@@ -77,8 +77,8 @@ func TestMemoryCacheHitRate(t *testing.T) {
 }
 
 func BenchmarkMemoryCacheGet(b *testing.B) {
-	cache := NewMemoryCache(1000)
-	cache.Set("key", []byte("value"), 1*time.Hour)
+	cache := NewMemoryCache(1000, 1*time.Hour, 24*time.Hour)
+	cache.Set("key", []byte("value"))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -87,10 +87,10 @@ func BenchmarkMemoryCacheGet(b *testing.B) {
 }
 
 func BenchmarkMemoryCacheSet(b *testing.B) {
-	cache := NewMemoryCache(1000)
+	cache := NewMemoryCache(1000, 1*time.Hour, 24*time.Hour)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cache.Set("key", []byte("value"), 1*time.Hour)
+		cache.Set("key", []byte("value"))
 	}
 }

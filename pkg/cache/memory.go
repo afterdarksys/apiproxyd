@@ -12,6 +12,8 @@ import (
 type MemoryCache struct {
 	mu         sync.RWMutex
 	capacity   int
+	ttl        time.Duration
+	staleTTL   time.Duration
 	items      map[string]*list.Element
 	lru        *list.List
 	hits       int64
@@ -28,12 +30,14 @@ type memoryEntry struct {
 }
 
 // NewMemoryCache creates a new LRU memory cache with specified capacity
-func NewMemoryCache(capacity int) *MemoryCache {
+func NewMemoryCache(capacity int, ttl time.Duration, staleTTL time.Duration) *MemoryCache {
 	if capacity <= 0 {
 		capacity = 1000 // default to 1000 entries
 	}
 	return &MemoryCache{
 		capacity: capacity,
+		ttl:      ttl,
+		staleTTL: staleTTL,
 		items:    make(map[string]*list.Element),
 		lru:      list.New(),
 	}
@@ -54,7 +58,9 @@ func (m *MemoryCache) Get(key string) ([]byte, error) {
 
 	// Check if expired
 	if time.Now().After(entry.expiresAt) {
-		m.removeElement(elem)
+		if time.Now().After(entry.expiresAt.Add(m.staleTTL)) {
+			m.removeElement(elem)
+		}
 		m.misses++
 		return nil, fmt.Errorf("cache expired")
 	}
@@ -66,8 +72,22 @@ func (m *MemoryCache) Get(key string) ([]byte, error) {
 	return entry.value, nil
 }
 
-// Set stores a value in the memory cache
-func (m *MemoryCache) Set(key string, value []byte, ttl time.Duration) error {
+// GetStale retrieves a potentially expired value from the memory cache
+func (m *MemoryCache) GetStale(key string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	elem, exists := m.items[key]
+	if !exists {
+		return nil, fmt.Errorf("cache miss")
+	}
+
+	entry := elem.Value.(*memoryEntry)
+	return entry.value, nil
+}
+
+// Set stores a value in the memory cache using the default stale TTL for expiration
+func (m *MemoryCache) Set(key string, value []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -77,7 +97,7 @@ func (m *MemoryCache) Set(key string, value []byte, ttl time.Duration) error {
 		entry := elem.Value.(*memoryEntry)
 		oldSize := entry.size
 		entry.value = value
-		entry.expiresAt = time.Now().Add(ttl)
+		entry.expiresAt = time.Now().Add(m.ttl)
 		entry.size = int64(len(value))
 		m.totalBytes = m.totalBytes - oldSize + entry.size
 		m.lru.MoveToFront(elem)
@@ -88,7 +108,7 @@ func (m *MemoryCache) Set(key string, value []byte, ttl time.Duration) error {
 	entry := &memoryEntry{
 		key:       key,
 		value:     value,
-		expiresAt: time.Now().Add(ttl),
+		expiresAt: time.Now().Add(m.ttl),
 		size:      int64(len(value)),
 	}
 
@@ -126,8 +146,14 @@ func (m *MemoryCache) Clear() {
 	m.totalBytes = 0
 }
 
+// Close implements the cache.Cache interface by clearing the cache
+func (m *MemoryCache) Close() error {
+	m.Clear()
+	return nil
+}
+
 // Stats returns cache statistics
-func (m *MemoryCache) Stats() *Stats {
+func (m *MemoryCache) Stats() (*Stats, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -143,7 +169,7 @@ func (m *MemoryCache) Stats() *Stats {
 		HitRate:   hitRate,
 		Hits:      m.hits,
 		Misses:    m.misses,
-	}
+	}, nil
 }
 
 // CleanupExpired removes all expired entries
@@ -159,7 +185,8 @@ func (m *MemoryCache) CleanupExpired() int {
 		entry := elem.Value.(*memoryEntry)
 		prev := elem.Prev()
 
-		if now.After(entry.expiresAt) {
+		// Only remove if it's past the stale TTL
+		if now.After(entry.expiresAt.Add(m.staleTTL)) {
 			m.removeElement(elem)
 			removed++
 		}

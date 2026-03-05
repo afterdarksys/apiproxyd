@@ -1,8 +1,17 @@
 package cache
 
 import (
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// call represents an in-flight request to the L2 cache
+type call struct {
+	wg  sync.WaitGroup
+	val []byte
+	err error
+}
 
 // LayeredCache implements a two-tier cache system:
 // - L1: Fast in-memory LRU cache (limited size, volatile)
@@ -15,14 +24,18 @@ type LayeredCache struct {
 	ttl    time.Duration // Default TTL
 	l1Miss int64         // L1 misses that hit L2
 	l2Miss int64         // Complete cache misses
+
+	mu    sync.Mutex
+	calls map[string]*call
 }
 
 // NewLayeredCache creates a new layered cache
-func NewLayeredCache(dbCache Cache, memoryCacheSize int, ttl time.Duration) *LayeredCache {
+func NewLayeredCache(dbCache Cache, memoryCacheSize int, ttl time.Duration, staleTTL time.Duration) *LayeredCache {
 	return &LayeredCache{
-		l1:  NewMemoryCache(memoryCacheSize),
-		l2:  dbCache,
-		ttl: ttl,
+		l1:    NewMemoryCache(memoryCacheSize, ttl, staleTTL),
+		l2:    dbCache,
+		ttl:   ttl,
+		calls: make(map[string]*call),
 	}
 }
 
@@ -33,18 +46,54 @@ func (c *LayeredCache) Get(key string) ([]byte, error) {
 		return value, nil
 	}
 
-	// L1 miss - try L2 (database cache)
+	// L1 miss - use SingleFlight to prevent L2 thundering herd
+	c.mu.Lock()
+	if c.calls == nil {
+		c.calls = make(map[string]*call)
+	}
+	if inFlight, ok := c.calls[key]; ok {
+		c.mu.Unlock()
+		inFlight.wg.Wait()
+		return inFlight.val, inFlight.err
+	}
+
+	inFlight := &call{}
+	inFlight.wg.Add(1)
+	c.calls[key] = inFlight
+	c.mu.Unlock() // unlock to allow other readers to wait on this flight
+
+	// Execute L2 fetch
 	value, err := c.l2.Get(key)
+
+	inFlight.val = value
+	inFlight.err = err
+
+	c.mu.Lock()
+	delete(c.calls, key)
+	c.mu.Unlock()
+	inFlight.wg.Done()
+
 	if err != nil {
-		c.l2Miss++
+		atomic.AddInt64(&c.l2Miss, 1)
 		return nil, err
 	}
 
 	// L2 hit - promote to L1 for future requests
-	c.l1Miss++
-	c.l1.Set(key, value, c.ttl)
+	atomic.AddInt64(&c.l1Miss, 1)
+	c.l1.Set(key, value)
 
 	return value, nil
+}
+
+// GetStale retrieves a potentially expired value from the cache (L1 -> L2)
+func (c *LayeredCache) GetStale(key string) ([]byte, error) {
+	// Try L1
+	if value, err := c.l1.GetStale(key); err == nil {
+		return value, nil
+	}
+
+	// Try L2
+	return c.l2.GetStale(key)
 }
 
 // Set stores a value in both cache layers
@@ -55,7 +104,7 @@ func (c *LayeredCache) Set(key string, value []byte) error {
 	}
 
 	// Then store in L1 (memory) for fast access
-	return c.l1.Set(key, value, c.ttl)
+	return c.l1.Set(key, value)
 }
 
 // Delete removes a key from both cache layers
@@ -69,15 +118,18 @@ func (c *LayeredCache) Delete(key string) error {
 
 // Stats returns combined statistics from both layers
 func (c *LayeredCache) Stats() (*Stats, error) {
-	l1Stats := c.l1.Stats()
+	l1Stats, _ := c.l1.Stats()
 	l2Stats, err := c.l2.Stats()
 	if err != nil {
 		return nil, err
 	}
 
 	// Calculate combined hit rate
-	totalHits := l1Stats.Hits + c.l1Miss
-	totalMisses := c.l2Miss
+	l1Misses := atomic.LoadInt64(&c.l1Miss)
+	l2Misses := atomic.LoadInt64(&c.l2Miss)
+
+	totalHits := l1Stats.Hits + l1Misses
+	totalMisses := l2Misses
 	total := totalHits + totalMisses
 	hitRate := 0.0
 	if total > 0 {
@@ -85,11 +137,11 @@ func (c *LayeredCache) Stats() (*Stats, error) {
 	}
 
 	return &Stats{
-		Entries:   l2Stats.Entries,        // L2 is the source of truth for total entries
-		SizeBytes: l2Stats.SizeBytes,      // L2 size (L1 size is much smaller)
-		HitRate:   hitRate,                // Combined hit rate
-		Hits:      totalHits,              // L1 hits + L2 hits
-		Misses:    totalMisses,            // Complete misses
+		Entries:   l2Stats.Entries,   // L2 is the source of truth for total entries
+		SizeBytes: l2Stats.SizeBytes, // L2 size (L1 size is much smaller)
+		HitRate:   hitRate,           // Combined hit rate
+		Hits:      totalHits,         // L1 hits + L2 hits
+		Misses:    totalMisses,       // Complete misses
 	}, nil
 }
 
@@ -112,7 +164,7 @@ func (c *LayeredCache) CleanupExpired() error {
 }
 
 // GetL1Stats returns L1 (memory) cache statistics
-func (c *LayeredCache) GetL1Stats() *Stats {
+func (c *LayeredCache) GetL1Stats() (*Stats, error) {
 	return c.l1.Stats()
 }
 

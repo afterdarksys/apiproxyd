@@ -1,0 +1,40 @@
+{
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8888,
+        "read_timeout": 15,
+        "write_timeout": 15,
+        "idle_timeout": 60,
+        "tls_enabled": false
+    },
+    "entry_point": "http://localhost:8081",
+    "api_key": "dummy",
+    "cache": {
+        "backend": "sqlite",
+        "path": "/tmp/test_cache.db",
+        "ttl": 86400,
+        "memory_cache_enabled": true,
+        "memory_cache_size": 1000
+    },
+    "security": {
+        "rate_limit_enabled": false,
+        "block_private_ips": false,
+        "allowed_upstream_hosts": [
+            "localhost",
+            "127.0.0.1"
+        ]
+    },
+    "whitelisted_endpoints": [
+        "/v1/*"
+    ],
+    "client": {
+        "deduplication_enabled": false
+    },
+    "plugins": {
+        "enabled": true,
+        "directory": "/Users/ryan/development/apiproxyd/examples/plugins/go/apiproxy_app",
+        "plugins": [
+            "apiproxy_app"
+        ]
+    }
+}

@@ -10,6 +10,7 @@ import (
 // Cache defines the interface for cache backends
 type Cache interface {
 	Get(key string) ([]byte, error)
+	GetStale(key string) ([]byte, error)
 	Set(key string, value []byte) error
 	Delete(key string) error
 	Stats() (*Stats, error)
@@ -27,24 +28,24 @@ type Stats struct {
 
 // Entry represents a cached item
 type Entry struct {
-	Key        string
-	Value      []byte
-	Method     string
-	Path       string
+	Key         string
+	Value       []byte
+	Method      string
+	Path        string
 	RequestBody string
-	StatusCode int
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
-	Metadata   map[string]string
+	StatusCode  int
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	Metadata    map[string]string
 }
 
 // New creates a new cache backend
 func New(backend, path string) (Cache, error) {
 	switch backend {
 	case "sqlite", "":
-		return NewSQLite(path)
+		return NewSQLite(path, 24*time.Hour)
 	case "postgres", "postgresql":
-		return NewPostgres(path)
+		return NewPostgres(path, 24*time.Hour)
 	default:
 		return nil, fmt.Errorf("unsupported cache backend: %s", backend)
 	}
@@ -52,9 +53,9 @@ func New(backend, path string) (Cache, error) {
 
 // CacheOptions holds configuration for creating a cache
 type CacheOptions struct {
-	Backend            string
-	Path               string
-	TTL                time.Duration
+	Backend string
+	Path    string
+	TTL     time.Duration
 	// Memory cache options
 	MemoryCacheEnabled bool
 	MemoryCacheSize    int
@@ -63,6 +64,9 @@ type CacheOptions struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+	// Stale cache options
+	StaleIfError bool
+	StaleTTL     time.Duration
 }
 
 // NewWithOptions creates a cache with advanced options
@@ -76,25 +80,27 @@ func NewWithOptions(opts *CacheOptions) (Cache, error) {
 		if opts.MaxOpenConns > 0 {
 			dbCache, err = NewSQLiteWithConfig(
 				opts.Path,
+				opts.StaleTTL,
 				opts.MaxOpenConns,
 				opts.MaxIdleConns,
 				opts.ConnMaxLifetime,
 				opts.ConnMaxIdleTime,
 			)
 		} else {
-			dbCache, err = NewSQLite(opts.Path)
+			dbCache, err = NewSQLite(opts.Path, opts.StaleTTL)
 		}
 	case "postgres", "postgresql":
 		if opts.MaxOpenConns > 0 {
 			dbCache, err = NewPostgresWithConfig(
 				opts.Path,
+				opts.StaleTTL,
 				opts.MaxOpenConns,
 				opts.MaxIdleConns,
 				opts.ConnMaxLifetime,
 				opts.ConnMaxIdleTime,
 			)
 		} else {
-			dbCache, err = NewPostgres(opts.Path)
+			dbCache, err = NewPostgres(opts.Path, opts.StaleTTL)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported cache backend: %s", opts.Backend)
@@ -110,7 +116,7 @@ func NewWithOptions(opts *CacheOptions) (Cache, error) {
 		if ttl == 0 {
 			ttl = 24 * time.Hour // default TTL
 		}
-		return NewLayeredCache(dbCache, opts.MemoryCacheSize, ttl), nil
+		return NewLayeredCache(dbCache, opts.MemoryCacheSize, ttl, opts.StaleTTL), nil
 	}
 
 	return dbCache, nil

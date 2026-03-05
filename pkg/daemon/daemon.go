@@ -21,10 +21,12 @@ import (
 
 	"github.com/afterdarksys/apiproxyd/pkg/cache"
 	"github.com/afterdarksys/apiproxyd/pkg/client"
+	"github.com/afterdarksys/apiproxyd/pkg/cluster"
 	"github.com/afterdarksys/apiproxyd/pkg/config"
 	"github.com/afterdarksys/apiproxyd/pkg/metrics"
 	"github.com/afterdarksys/apiproxyd/pkg/middleware"
 	"github.com/afterdarksys/apiproxyd/pkg/plugin"
+	"github.com/afterdarksys/apiproxyd/pkg/queue"
 )
 
 type Daemon struct {
@@ -41,6 +43,10 @@ type Daemon struct {
 	scheduler      *Scheduler
 	gzipPool       sync.Pool
 	singleFlight   *client.SingleFlight
+
+	// Phase 4 Extensions
+	taskQueue   queue.TaskQueue
+	clusterNode *cluster.Server
 }
 
 func New(host string, port int) *Daemon {
@@ -98,8 +104,19 @@ func (d *Daemon) Start() error {
 		fmt.Printf("Started cache cleanup scheduler (interval: %ds)\n", cfg.Cache.CleanupInterval)
 	}
 
+	// Load API Keys from api_keys.json
+	authValue := cfg.APIKey
+	authType := "APIKey"
+
+	if apiKeys, err := config.LoadAPIKeys(); err == nil {
+		if val, typ := apiKeys.GetPrimaryAuth(); val != "" {
+			authValue = val
+			authType = typ
+		}
+	}
+
 	// Initialize client with advanced configuration
-	if cfg.APIKey != "" {
+	if authValue != "" {
 		clientCfg := &client.ClientConfig{
 			RequestTimeout:          time.Duration(cfg.Client.RequestTimeout) * time.Second,
 			DialTimeout:             time.Duration(cfg.Client.DialTimeout) * time.Second,
@@ -117,7 +134,7 @@ func (d *Daemon) Start() error {
 			CircuitBreakerHalfOpen:  cfg.Client.CircuitBreakerHalfOpen,
 			DeduplicationEnabled:    cfg.Client.DeduplicationEnabled,
 		}
-		d.client = client.NewWithConfig(cfg.APIKey, clientCfg)
+		d.client = client.NewWithAuth(authValue, authType, clientCfg)
 		d.client.BaseURL = cfg.EntryPoint
 	}
 
@@ -166,6 +183,47 @@ func (d *Daemon) Start() error {
 			cfg.Security.BlockPrivateIPs,
 		)
 		fmt.Println("SSRF protection enabled")
+	}
+
+	// Initialize Task Queue
+	if cfg.Queue.Enabled {
+		switch cfg.Queue.Backend {
+		case "river":
+			if cfg.Cache.PostgresDSN != "" {
+				q, err := queue.NewRiverQueue(context.Background(), cfg.Cache.PostgresDSN)
+				if err != nil {
+					return fmt.Errorf("failed to init river queue: %w", err)
+				}
+				d.taskQueue = q
+			} else {
+				fmt.Println("⚠️ River queue requested but no postgres_dsn provided")
+			}
+		case "asynq":
+			q, err := queue.NewAsynqQueue(cfg.Queue.RedisAddr)
+			if err != nil {
+				return fmt.Errorf("failed to init asynq queue: %w", err)
+			}
+			d.taskQueue = q
+		}
+
+		if d.taskQueue != nil {
+			if err := d.taskQueue.Start(context.Background()); err != nil {
+				return fmt.Errorf("failed to start task queue: %w", err)
+			}
+			fmt.Printf("✅ Task Queue started using backend: %s\n", cfg.Queue.Backend)
+		}
+	}
+
+	// Initialize gRPC Cluster
+	if cfg.Cluster.Enabled {
+		d.clusterNode = cluster.NewServer(cfg.Cluster.NodeID, d.cache)
+		if err := d.clusterNode.Start(cfg.Cluster.Port); err != nil {
+			return fmt.Errorf("failed to start cluster node: %w", err)
+		}
+		fmt.Printf("✅ Cluster Node started on port: %d (ID: %s)\n", cfg.Cluster.Port, cfg.Cluster.NodeID)
+
+		// In a full implementation, the daemon would maintain active connections
+		// to the listed `cfg.Cluster.Peers` to broadcast CacheInvalidations.
 	}
 
 	// Create HTTP server with middleware chain
@@ -305,6 +363,14 @@ func (d *Daemon) Start() error {
 		d.pluginManager.Shutdown()
 	}
 
+	if d.taskQueue != nil {
+		d.taskQueue.Stop()
+	}
+
+	if d.clusterNode != nil {
+		d.clusterNode.Stop()
+	}
+
 	d.removePIDFile()
 
 	fmt.Println("✅ Daemon stopped")
@@ -405,8 +471,8 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"status":  status,
-		"version": "0.2.0",
+		"status":   status,
+		"version":  "0.2.0",
 		"database": dbStatus,
 	}
 
@@ -433,6 +499,14 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Extract endpoint path (remove /api prefix)
 	endpoint := strings.TrimPrefix(r.URL.Path, "/api")
+
+	// Append query string with semantic deduplication if configured
+	if d.cfg.Cache.SemanticDeduplication && len(r.URL.Query()) > 0 {
+		// url.Values.Encode() sorts keys alphabetically
+		endpoint = endpoint + "?" + r.URL.Query().Encode()
+	} else if r.URL.RawQuery != "" {
+		endpoint = endpoint + "?" + r.URL.RawQuery
+	}
 
 	// Check if endpoint is whitelisted
 	if !d.cfg.IsEndpointWhitelisted(endpoint) {
@@ -481,8 +555,13 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 		body = pluginReq.Body
 	}
 
-	// Generate cache key
-	cacheKey := cache.GenerateKey(pluginReq.Method, endpoint, string(body))
+	// Generate cache key or use custom key provided by plugin
+	var cacheKey string
+	if customKey, ok := pluginReq.Headers["X-Custom-Cache-Key"]; ok && customKey != "" {
+		cacheKey = customKey
+	} else {
+		cacheKey = cache.GenerateKey(pluginReq.Method, endpoint, string(body))
+	}
 
 	// Check if this is an offline endpoint
 	isOffline := d.cfg.IsEndpointOffline(endpoint)
@@ -559,6 +638,18 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		// Try to serve stale cache if configured
+		if d.cfg.Cache.StaleIfError {
+			if stale, staleErr := d.cache.GetStale(cacheKey); staleErr == nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Cache", "STALE")
+				w.Header().Set("X-Cache-Warning", "110 - \"Response is Stale\"")
+				d.writeResponse(w, r, stale, startTime, true)
+				d.metrics.RecordRequest(r.Method, http.StatusOK, time.Since(startTime), true, int64(len(stale)))
+				return
+			}
+		}
+
 		// Return safe error message (don't leak internal details)
 		http.Error(w, "Upstream service unavailable", http.StatusBadGateway)
 		d.metrics.RecordRequest(r.Method, http.StatusBadGateway, time.Since(startTime), false, 0)

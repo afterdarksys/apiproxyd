@@ -5,7 +5,7 @@
 all: go python
 
 # Build all Go plugins
-go: logger custom_router web_admin
+go: logger custom_router web_admin apiproxy_app
 
 logger:
 	@echo "Building logger plugin..."
@@ -22,6 +22,11 @@ web_admin:
 	@cd go/web_admin && go build -buildmode=plugin -o web_admin.so admin.go
 	@echo "✅ Built go/web_admin/web_admin.so"
 
+apiproxy_app:
+	@echo "Building apiproxy_app plugin..."
+	@cd go/apiproxy_app && go build -buildmode=plugin -o apiproxy_app.so apiproxy_app.go
+	@echo "✅ Built go/apiproxy_app/apiproxy_app.so"
+
 # Make Python plugins executable
 python:
 	@echo "Setting up Python plugins..."
@@ -35,6 +40,7 @@ clean:
 	@rm -f go/logger/logger.so
 	@rm -f go/custom_router/custom_router.so
 	@rm -f go/web_admin/web_admin.so
+	@rm -f go/apiproxy_app/apiproxy_app.so
 	@echo "✅ Cleaned"
 
 # Install plugins to system location
@@ -45,6 +51,7 @@ install: all
 	@cp go/logger/logger.so ~/.apiproxy/plugins/go/ 2>/dev/null || true
 	@cp go/custom_router/custom_router.so ~/.apiproxy/plugins/go/ 2>/dev/null || true
 	@cp go/web_admin/web_admin.so ~/.apiproxy/plugins/go/ 2>/dev/null || true
+	@cp go/apiproxy_app/apiproxy_app.so ~/.apiproxy/plugins/go/ 2>/dev/null || true
 	@cp python/logger.py ~/.apiproxy/plugins/python/
 	@cp python/openai_adapter.py ~/.apiproxy/plugins/python/
 	@echo "✅ Plugins installed to ~/.apiproxy/plugins/"

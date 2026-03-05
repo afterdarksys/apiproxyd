@@ -10,12 +10,13 @@ import (
 )
 
 type PostgresCache struct {
-	db  *sql.DB
-	dsn string
-	ttl time.Duration
+	db       *sql.DB
+	dsn      string
+	ttl      time.Duration
+	staleTTL time.Duration
 }
 
-func NewPostgres(dsn string) (*PostgresCache, error) {
+func NewPostgres(dsn string, staleTTL time.Duration) (*PostgresCache, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("PostgreSQL DSN is required")
 	}
@@ -27,8 +28,8 @@ func NewPostgres(dsn string) (*PostgresCache, error) {
 
 	// Configure connection pool for PostgreSQL
 	// PostgreSQL handles concurrency well, so we can have more connections
-	db.SetMaxOpenConns(25)       // Max concurrent connections
-	db.SetMaxIdleConns(5)        // Keep connections warm for reuse
+	db.SetMaxOpenConns(25)                 // Max concurrent connections
+	db.SetMaxIdleConns(5)                  // Keep connections warm for reuse
 	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
 	db.SetConnMaxIdleTime(1 * time.Minute) // Close idle connections
 
@@ -45,14 +46,15 @@ func NewPostgres(dsn string) (*PostgresCache, error) {
 	}
 
 	return &PostgresCache{
-		db:  db,
-		dsn: dsn,
-		ttl: 24 * time.Hour,
+		db:       db,
+		dsn:      dsn,
+		ttl:      24 * time.Hour,
+		staleTTL: staleTTL,
 	}, nil
 }
 
 // NewPostgresWithConfig creates a Postgres cache with custom connection pool settings
-func NewPostgresWithConfig(dsn string, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*PostgresCache, error) {
+func NewPostgresWithConfig(dsn string, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*PostgresCache, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("PostgreSQL DSN is required")
 	}
@@ -129,8 +131,29 @@ func (c *PostgresCache) Get(key string) ([]byte, error) {
 
 	// Check if expired
 	if time.Now().After(expiresAt) {
-		c.Delete(key)
+		if time.Now().After(expiresAt.Add(c.staleTTL)) {
+			c.Delete(key)
+		}
 		return nil, fmt.Errorf("cache expired")
+	}
+
+	return value, nil
+}
+
+func (c *PostgresCache) GetStale(key string) ([]byte, error) {
+	var value []byte
+
+	err := c.db.QueryRow(`
+		SELECT value
+		FROM apiproxy_cache
+		WHERE key = $1
+	`, key).Scan(&value)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("cache miss")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cache entry: %w", err)
 	}
 
 	return value, nil
@@ -218,6 +241,7 @@ func (c *PostgresCache) Close() error {
 
 // CleanupExpired removes all expired entries
 func (c *PostgresCache) CleanupExpired() error {
-	_, err := c.db.Exec("DELETE FROM apiproxy_cache WHERE expires_at <= $1", time.Now())
+	expireTime := time.Now().Add(-c.staleTTL)
+	_, err := c.db.Exec("DELETE FROM apiproxy_cache WHERE expires_at <= $1", expireTime)
 	return err
 }

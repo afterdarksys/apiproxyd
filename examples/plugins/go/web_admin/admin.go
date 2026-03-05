@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"sync"
 	"time"
@@ -30,15 +29,15 @@ type WebAdminPlugin struct {
 
 // RequestLog stores information about a proxied request
 type RequestLog struct {
-	Timestamp    time.Time `json:"timestamp"`
-	Method       string    `json:"method"`
-	Endpoint     string    `json:"endpoint"`
-	StatusCode   int       `json:"status_code"`
-	Duration     int64     `json:"duration_ms"`
-	Cached       bool      `json:"cached"`
-	BodySize     int       `json:"body_size"`
+	Timestamp    time.Time         `json:"timestamp"`
+	Method       string            `json:"method"`
+	Endpoint     string            `json:"endpoint"`
+	StatusCode   int               `json:"status_code"`
+	Duration     int64             `json:"duration_ms"`
+	Cached       bool              `json:"cached"`
+	BodySize     int               `json:"body_size"`
 	Headers      map[string]string `json:"headers,omitempty"`
-	ResponseBody string    `json:"response_body,omitempty"`
+	ResponseBody string            `json:"response_body,omitempty"`
 }
 
 // Stats tracks overall statistics
@@ -450,27 +449,25 @@ func (w *WebAdminPlugin) handleDashboard(wr http.ResponseWriter, r *http.Request
                         const timestamp = new Date(req.timestamp).toLocaleTimeString();
                         const statusClass = req.status_code < 400 ? 'status-200' :
                                           req.status_code < 500 ? 'status-400' : 'status-500';
-                        return \`
-                            <div class="request-item" onclick="toggleRequestDetails(this)">
-                                <div class="request-header">
-                                    <span class="method \${req.method}">\${req.method}</span>
-                                    <span class="endpoint">\${req.endpoint}</span>
-                                    <span class="badge \${req.cached ? 'cached' : 'miss'}">
-                                        \${req.cached ? '⚡ CACHED' : 'MISS'}
-                                    </span>
-                                </div>
-                                <div class="request-meta">
-                                    <span>\${timestamp}</span>
-                                    <span class="\${statusClass}">Status: \${req.status_code}</span>
-                                    <span class="duration">⏱ \${req.duration_ms}ms</span>
-                                    <span>📦 \${formatBytes(req.body_size)}</span>
-                                </div>
-                                <div class="request-details">
-                                    <h3 style="color: #00ff88; margin-bottom: 10px;">Response Body</h3>
-                                    <pre>\${req.response_body || 'No body'}</pre>
-                                </div>
-                            </div>
-                        \`;
+                        return '<div class="request-item" onclick="toggleRequestDetails(this)">' +
+                                '<div class="request-header">' +
+                                    '<span class="method ' + req.method + '">' + req.method + '</span>' +
+                                    '<span class="endpoint">' + req.endpoint + '</span>' +
+                                    '<span class="badge ' + (req.cached ? 'cached' : 'miss') + '">' +
+                                        (req.cached ? '⚡ CACHED' : 'MISS') +
+                                    '</span>' +
+                                '</div>' +
+                                '<div class="request-meta">' +
+                                    '<span>' + timestamp + '</span>' +
+                                    '<span class="' + statusClass + '">Status: ' + req.status_code + '</span>' +
+                                    '<span class="duration">⏱ ' + req.duration_ms + 'ms</span>' +
+                                    '<span>📦 ' + formatBytes(req.body_size) + '</span>' +
+                                '</div>' +
+                                '<div class="request-details">' +
+                                    '<h3 style="color: #00ff88; margin-bottom: 10px;">Response Body</h3>' +
+                                    '<pre>' + (req.response_body || 'No body') + '</pre>' +
+                                '</div>' +
+                            '</div>';
                     }).join('');
                 }
             } catch (e) {
