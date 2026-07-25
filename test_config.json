@@ -31,10 +31,7 @@
         "deduplication_enabled": false
     },
     "plugins": {
-        "enabled": true,
-        "directory": "/Users/ryan/development/apiproxyd/examples/plugins/go/apiproxy_app",
-        "plugins": [
-            "apiproxy_app"
-        ]
+        "enabled": false,
+        "plugins": []
     }
 }

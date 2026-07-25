@@ -17,6 +17,10 @@ type PostgresCache struct {
 }
 
 func NewPostgres(dsn string, staleTTL time.Duration) (*PostgresCache, error) {
+	return newPostgres(dsn, 24*time.Hour, staleTTL)
+}
+
+func newPostgres(dsn string, ttl, staleTTL time.Duration) (*PostgresCache, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("PostgreSQL DSN is required")
 	}
@@ -48,45 +52,24 @@ func NewPostgres(dsn string, staleTTL time.Duration) (*PostgresCache, error) {
 	return &PostgresCache{
 		db:       db,
 		dsn:      dsn,
-		ttl:      24 * time.Hour,
+		ttl:      ttl,
 		staleTTL: staleTTL,
 	}, nil
 }
 
 // NewPostgresWithConfig creates a Postgres cache with custom connection pool settings
-func NewPostgresWithConfig(dsn string, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*PostgresCache, error) {
-	if dsn == "" {
-		return nil, fmt.Errorf("PostgreSQL DSN is required")
-	}
-
-	db, err := sql.Open("postgres", dsn)
+func NewPostgresWithConfig(dsn string, ttl, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*PostgresCache, error) {
+	cache, err := newPostgres(dsn, ttl, staleTTL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		return nil, err
 	}
 
 	// Apply custom pool configuration
-	db.SetMaxOpenConns(maxOpen)
-	db.SetMaxIdleConns(maxIdle)
-	db.SetConnMaxLifetime(maxLifetime)
-	db.SetConnMaxIdleTime(maxIdleTime)
-
-	// Test connection
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
-	}
-
-	// Initialize schema
-	if err := initPostgresSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
-	}
-
-	return &PostgresCache{
-		db:  db,
-		dsn: dsn,
-		ttl: 24 * time.Hour,
-	}, nil
+	cache.db.SetMaxOpenConns(maxOpen)
+	cache.db.SetMaxIdleConns(maxIdle)
+	cache.db.SetConnMaxLifetime(maxLifetime)
+	cache.db.SetConnMaxIdleTime(maxIdleTime)
+	return cache, nil
 }
 
 func initPostgresSchema(db *sql.DB) error {
@@ -142,18 +125,24 @@ func (c *PostgresCache) Get(key string) ([]byte, error) {
 
 func (c *PostgresCache) GetStale(key string) ([]byte, error) {
 	var value []byte
+	var expiresAt time.Time
 
 	err := c.db.QueryRow(`
-		SELECT value
+		SELECT value, expires_at
 		FROM apiproxy_cache
 		WHERE key = $1
-	`, key).Scan(&value)
+	`, key).Scan(&value, &expiresAt)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("cache miss")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cache entry: %w", err)
+	}
+
+	if time.Now().After(expiresAt.Add(c.staleTTL)) {
+		_ = c.Delete(key)
+		return nil, fmt.Errorf("stale cache expired")
 	}
 
 	return value, nil
@@ -206,6 +195,15 @@ func (c *PostgresCache) Delete(key string) error {
 	_, err := c.db.Exec("DELETE FROM apiproxy_cache WHERE key = $1", key)
 	if err != nil {
 		return fmt.Errorf("failed to delete cache entry: %w", err)
+	}
+	return nil
+}
+
+// Clear removes every cached response.
+func (c *PostgresCache) Clear() error {
+	_, err := c.db.Exec("DELETE FROM apiproxy_cache")
+	if err != nil {
+		return fmt.Errorf("failed to clear cache: %w", err)
 	}
 	return nil
 }

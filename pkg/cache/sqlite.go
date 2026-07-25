@@ -19,6 +19,10 @@ type SQLiteCache struct {
 }
 
 func NewSQLite(path string, staleTTL time.Duration) (*SQLiteCache, error) {
+	return newSQLite(path, 24*time.Hour, staleTTL)
+}
+
+func newSQLite(path string, ttl, staleTTL time.Duration) (*SQLiteCache, error) {
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -62,14 +66,14 @@ func NewSQLite(path string, staleTTL time.Duration) (*SQLiteCache, error) {
 	return &SQLiteCache{
 		db:       db,
 		path:     path,
-		ttl:      24 * time.Hour, // Default 24 hour TTL
+		ttl:      ttl,
 		staleTTL: staleTTL,
 	}, nil
 }
 
 // NewSQLiteWithConfig creates a SQLite cache with custom connection pool settings
-func NewSQLiteWithConfig(path string, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*SQLiteCache, error) {
-	cache, err := NewSQLite(path, staleTTL)
+func NewSQLiteWithConfig(path string, ttl, staleTTL time.Duration, maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) (*SQLiteCache, error) {
+	cache, err := newSQLite(path, ttl, staleTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -137,18 +141,24 @@ func (c *SQLiteCache) Get(key string) ([]byte, error) {
 
 func (c *SQLiteCache) GetStale(key string) ([]byte, error) {
 	var value []byte
+	var expiresAt time.Time
 
 	err := c.db.QueryRow(`
-		SELECT value
+		SELECT value, expires_at
 		FROM cache_entries
 		WHERE key = ?
-	`, key).Scan(&value)
+	`, key).Scan(&value, &expiresAt)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("cache miss")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cache entry: %w", err)
+	}
+
+	if time.Now().After(expiresAt.Add(c.staleTTL)) {
+		_ = c.Delete(key)
+		return nil, fmt.Errorf("stale cache expired")
 	}
 
 	return value, nil
@@ -190,6 +200,15 @@ func (c *SQLiteCache) Delete(key string) error {
 	_, err := c.db.Exec("DELETE FROM cache_entries WHERE key = ?", key)
 	if err != nil {
 		return fmt.Errorf("failed to delete cache entry: %w", err)
+	}
+	return nil
+}
+
+// Clear removes every cached response.
+func (c *SQLiteCache) Clear() error {
+	_, err := c.db.Exec("DELETE FROM cache_entries")
+	if err != nil {
+		return fmt.Errorf("failed to clear cache: %w", err)
 	}
 	return nil
 }

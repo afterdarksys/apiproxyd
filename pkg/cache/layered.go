@@ -116,6 +116,15 @@ func (c *LayeredCache) Delete(key string) error {
 	return c.l2.Delete(key)
 }
 
+// Clear removes all entries from both cache layers.
+func (c *LayeredCache) Clear() error {
+	_ = c.l1.Clear()
+	if clearer, ok := c.l2.(interface{ Clear() error }); ok {
+		return clearer.Clear()
+	}
+	return nil
+}
+
 // Stats returns combined statistics from both layers
 func (c *LayeredCache) Stats() (*Stats, error) {
 	l1Stats, _ := c.l1.Stats()
@@ -170,5 +179,5 @@ func (c *LayeredCache) GetL1Stats() (*Stats, error) {
 
 // ClearL1 clears only the L1 cache (useful for testing or cache warming)
 func (c *LayeredCache) ClearL1() {
-	c.l1.Clear()
+	_ = c.l1.Clear()
 }

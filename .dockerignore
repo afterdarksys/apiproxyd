@@ -1,0 +1,7 @@
+.git
+.code-review-graph
+.claude
+apiproxy
+bin
+*.db
+*.log

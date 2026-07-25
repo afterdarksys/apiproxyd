@@ -11,6 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var configFileOverride string
+
+// SetPath overrides the configuration file used by Load and Save.
+// Passing an empty path restores the default discovery behavior.
+func SetPath(path string) {
+	configFileOverride = path
+}
+
 type ServerConfig struct {
 	Host         string `yaml:"host" json:"host"`
 	Port         int    `yaml:"port" json:"port"`
@@ -61,6 +69,9 @@ type PluginEntry struct {
 
 // SecurityConfig holds security-related settings
 type SecurityConfig struct {
+	// Network exposure. Remote binding is opt-in because local API routes do
+	// not provide a complete multi-user authentication boundary.
+	AllowRemote bool `yaml:"allow_remote" json:"allow_remote"`
 	// Rate limiting
 	RateLimitEnabled bool `yaml:"rate_limit_enabled" json:"rate_limit_enabled"`
 	RateLimitPerIP   int  `yaml:"rate_limit_per_ip" json:"rate_limit_per_ip"`   // requests per minute
@@ -115,6 +126,14 @@ type ClusterConfig struct {
 	Broadcast bool     `yaml:"broadcast" json:"broadcast"` // Broadcast invalidations to peers
 }
 
+// LLMContextConfig holds configuration for coding-agent context storage.
+type LLMContextConfig struct {
+	Enabled            bool   `yaml:"enabled" json:"enabled"`
+	Path               string `yaml:"path" json:"path"`
+	MaxRequestBytes    int64  `yaml:"max_request_bytes" json:"max_request_bytes"`
+	DefaultPacketBytes int    `yaml:"default_packet_bytes" json:"default_packet_bytes"`
+}
+
 type Config struct {
 	// Server configuration
 	Server ServerConfig `yaml:"server" json:"server"`
@@ -140,6 +159,9 @@ type Config struct {
 
 	// Cluster configuration
 	Cluster ClusterConfig `yaml:"cluster,omitempty" json:"cluster,omitempty"`
+
+	// LLM context proxy configuration
+	LLMContext LLMContextConfig `yaml:"llm_context,omitempty" json:"llm_context,omitempty"`
 
 	// Offline endpoints - cached indefinitely, work without internet
 	OfflineEndpoints []string `yaml:"offline_endpoints" json:"offline_endpoints"`
@@ -191,6 +213,7 @@ func Default() *Config {
 			SemanticDeduplication: true,
 		},
 		Security: SecurityConfig{
+			AllowRemote:           false,
 			RateLimitEnabled:      true,
 			RateLimitPerIP:        60,  // 60 req/min per IP
 			RateLimitPerKey:       300, // 300 req/min per API key
@@ -229,11 +252,19 @@ func Default() *Config {
 			Peers:     []string{},
 			Broadcast: true,
 		},
+		LLMContext: LLMContextConfig{
+			Enabled:            false,
+			Path:               filepath.Join(home, ".apiproxy", "llm_context.db"),
+			MaxRequestBytes:    10 * 1024 * 1024,
+			DefaultPacketBytes: 12000,
+		},
 		OfflineEndpoints: []string{
 			"/health",
 			"/status",
 		},
 		WhitelistedEndpoints: []string{
+			"/darkapi/*",
+			"/dnsscience/*",
 			"/v1/darkapi/*",
 			"/v1/nerdapi/*",
 			"/v1/computeapi/*",
@@ -273,62 +304,69 @@ func (c *Config) Normalize() {
 	if c.Server.WriteTimeout == 0 {
 		c.Server.WriteTimeout = 15
 	}
+	if c.LLMContext.Path == "" {
+		home, _ := os.UserHomeDir()
+		c.LLMContext.Path = filepath.Join(home, ".apiproxy", "llm_context.db")
+	}
+	if c.LLMContext.MaxRequestBytes == 0 {
+		c.LLMContext.MaxRequestBytes = 10 * 1024 * 1024
+	}
+	if c.LLMContext.DefaultPacketBytes == 0 {
+		c.LLMContext.DefaultPacketBytes = 12000
+	}
+
+	c.Cache.Path = expandHome(c.Cache.Path)
+	c.LLMContext.Path = expandHome(c.LLMContext.Path)
+	for i := range c.Plugins.Plugins {
+		c.Plugins.Plugins[i].Path = expandHome(c.Plugins.Plugins[i].Path)
+	}
 }
 
 // Load reads configuration from file (supports both YAML and JSON)
 func Load() (*Config, error) {
+	if configFileOverride != "" {
+		return loadFile(configFileOverride)
+	}
+
 	// Try config.json first (new format)
 	jsonPath := ConfigJSONPath()
-	if data, err := os.ReadFile(jsonPath); err == nil {
-		var cfg Config
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse config.json: %w", err)
-		}
-		cfg.Normalize()
-		return &cfg, nil
+	if _, err := os.Stat(jsonPath); err == nil {
+		return loadFile(jsonPath)
 	}
 
 	// Fall back to config.yml (legacy format)
 	yamlPath := ConfigPath()
-	data, err := os.ReadFile(yamlPath)
-	if err != nil {
+	if _, err := os.Stat(yamlPath); err != nil {
 		if os.IsNotExist(err) {
 			// Return default config if file doesn't exist
-			return Default(), nil
+			cfg := Default()
+			if err := applyEnvironment(cfg); err != nil {
+				return nil, err
+			}
+			return cfg, nil
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	cfg.Normalize()
-	return &cfg, nil
+	return loadFile(yamlPath)
 }
 
 // LoadJSON loads config from config.json specifically
 func LoadJSON() (*Config, error) {
-	path := ConfigJSONPath()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config.json: %w", err)
-	}
-
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config.json: %w", err)
-	}
-
-	cfg.Normalize()
-	return &cfg, nil
+	return loadFile(ConfigJSONPath())
 }
 
 // Save writes configuration to file
 func Save(cfg *Config) error {
-	path := ConfigPath()
+	path := configFileOverride
+	if path == "" {
+		jsonPath := ConfigJSONPath()
+		if _, err := os.Stat(jsonPath); err == nil {
+			path = jsonPath
+		} else {
+			path = ConfigPath()
+		}
+	}
 
 	// Ensure directory exists
 	dir := filepath.Dir(path)
@@ -336,7 +374,14 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	data, err := yaml.Marshal(cfg)
+	var data []byte
+	var err error
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		data, err = json.MarshalIndent(cfg, "", "  ")
+		data = append(data, '\n')
+	} else {
+		data, err = yaml.Marshal(cfg)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -363,7 +408,11 @@ func SaveCredentials(cfg *Config) error {
 
 	// Update credentials
 	existing.APIKey = cfg.APIKey
-	existing.Endpoint = cfg.Endpoint
+	if cfg.EntryPoint != "" {
+		existing.EntryPoint = cfg.EntryPoint
+	} else if cfg.Endpoint != "" {
+		existing.EntryPoint = cfg.Endpoint
+	}
 	existing.UserID = cfg.UserID
 	existing.Tier = cfg.Tier
 
@@ -386,6 +435,99 @@ func ConfigJSONPath() string {
 	// Fall back to home directory
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".apiproxy", "config.json")
+}
+
+func loadFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %w", path, err)
+	}
+
+	cfg := Default()
+	provided := &Config{}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".yaml", ".yml":
+		err = yaml.Unmarshal(data, cfg)
+		if err == nil {
+			err = yaml.Unmarshal(data, provided)
+		}
+	default:
+		err = json.Unmarshal(data, cfg)
+		if err == nil {
+			err = json.Unmarshal(data, provided)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
+	}
+
+	applyLegacyFields(cfg, provided)
+	cfg.Normalize()
+	if err := applyEnvironment(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func applyLegacyFields(cfg, provided *Config) {
+	if provided.Endpoint != "" && provided.EntryPoint == "" {
+		cfg.EntryPoint = provided.Endpoint
+	}
+	if provided.DaemonHost != "" && provided.Server.Host == "" {
+		cfg.Server.Host = provided.DaemonHost
+	}
+	if provided.DaemonPort != 0 && provided.Server.Port == 0 {
+		cfg.Server.Port = provided.DaemonPort
+	}
+	if provided.CacheBackend != "" && provided.Cache.Backend == "" {
+		cfg.Cache.Backend = provided.CacheBackend
+	}
+	if provided.CachePath != "" && provided.Cache.Path == "" {
+		cfg.Cache.Path = provided.CachePath
+	}
+	if provided.CacheTTL != 0 && provided.Cache.TTL == 0 {
+		cfg.Cache.TTL = provided.CacheTTL
+	}
+	if provided.PostgresDSN != "" && provided.Cache.PostgresDSN == "" {
+		cfg.Cache.PostgresDSN = provided.PostgresDSN
+	}
+}
+
+func expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	return path
+}
+
+func applyEnvironment(cfg *Config) error {
+	keys := map[string]string{
+		"APIPROXY_API_KEY":               "api_key",
+		"APIPROXY_ENTRY_POINT":           "entry_point",
+		"APIPROXY_SERVER_HOST":           "server.host",
+		"APIPROXY_SERVER_PORT":           "server.port",
+		"APIPROXY_CACHE_BACKEND":         "cache.backend",
+		"APIPROXY_CACHE_PATH":            "cache.path",
+		"APIPROXY_CACHE_TTL":             "cache.ttl",
+		"APIPROXY_CACHE_POSTGRES_DSN":    "cache.postgres_dsn",
+		"APIPROXY_SECURITY_ALLOW_REMOTE": "security.allow_remote",
+		"APIPROXY_LLM_CONTEXT_ENABLED":   "llm_context.enabled",
+		"APIPROXY_LLM_CONTEXT_PATH":      "llm_context.path",
+	}
+	for envKey, configKey := range keys {
+		if value, ok := os.LookupEnv(envKey); ok {
+			if err := cfg.Set(configKey, value); err != nil {
+				return fmt.Errorf("invalid %s: %w", envKey, err)
+			}
+		}
+	}
+	cfg.Normalize()
+	return nil
 }
 
 // Set updates a configuration value
@@ -430,6 +572,32 @@ func (c *Config) Set(key, value string) error {
 		c.Cache.TTL = ttl
 	case "cache.postgres_dsn", "postgres.dsn", "postgres_dsn":
 		c.Cache.PostgresDSN = value
+	case "security.allow_remote":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid security.allow_remote value: %s", value)
+		}
+		c.Security.AllowRemote = enabled
+	case "llm_context.enabled":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid llm_context.enabled value: %s", value)
+		}
+		c.LLMContext.Enabled = enabled
+	case "llm_context.path":
+		c.LLMContext.Path = value
+	case "llm_context.max_request_bytes":
+		limit, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid llm_context.max_request_bytes value: %s", value)
+		}
+		c.LLMContext.MaxRequestBytes = limit
+	case "llm_context.default_packet_bytes":
+		limit, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid llm_context.default_packet_bytes value: %s", value)
+		}
+		c.LLMContext.DefaultPacketBytes = limit
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}

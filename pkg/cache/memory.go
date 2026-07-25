@@ -74,8 +74,8 @@ func (m *MemoryCache) Get(key string) ([]byte, error) {
 
 // GetStale retrieves a potentially expired value from the memory cache
 func (m *MemoryCache) GetStale(key string) ([]byte, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	elem, exists := m.items[key]
 	if !exists {
@@ -83,6 +83,10 @@ func (m *MemoryCache) GetStale(key string) ([]byte, error) {
 	}
 
 	entry := elem.Value.(*memoryEntry)
+	if time.Now().After(entry.expiresAt.Add(m.staleTTL)) {
+		m.removeElement(elem)
+		return nil, fmt.Errorf("stale cache expired")
+	}
 	return entry.value, nil
 }
 
@@ -137,19 +141,19 @@ func (m *MemoryCache) Delete(key string) error {
 }
 
 // Clear removes all entries from the cache
-func (m *MemoryCache) Clear() {
+func (m *MemoryCache) Clear() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.items = make(map[string]*list.Element)
 	m.lru.Init()
 	m.totalBytes = 0
+	return nil
 }
 
 // Close implements the cache.Cache interface by clearing the cache
 func (m *MemoryCache) Close() error {
-	m.Clear()
-	return nil
+	return m.Clear()
 }
 
 // Stats returns cache statistics

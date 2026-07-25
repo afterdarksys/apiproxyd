@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -43,9 +44,9 @@ type Entry struct {
 func New(backend, path string) (Cache, error) {
 	switch backend {
 	case "sqlite", "":
-		return NewSQLite(path, 24*time.Hour)
+		return newSQLite(path, 24*time.Hour, 24*time.Hour)
 	case "postgres", "postgresql":
-		return NewPostgres(path, 24*time.Hour)
+		return newPostgres(path, 24*time.Hour, 24*time.Hour)
 	default:
 		return nil, fmt.Errorf("unsupported cache backend: %s", backend)
 	}
@@ -71,6 +72,19 @@ type CacheOptions struct {
 
 // NewWithOptions creates a cache with advanced options
 func NewWithOptions(opts *CacheOptions) (Cache, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("cache options are required")
+	}
+
+	ttl := opts.TTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	staleTTL := opts.StaleTTL
+	if staleTTL < 0 {
+		staleTTL = 0
+	}
+
 	var dbCache Cache
 	var err error
 
@@ -80,27 +94,29 @@ func NewWithOptions(opts *CacheOptions) (Cache, error) {
 		if opts.MaxOpenConns > 0 {
 			dbCache, err = NewSQLiteWithConfig(
 				opts.Path,
-				opts.StaleTTL,
+				ttl,
+				staleTTL,
 				opts.MaxOpenConns,
 				opts.MaxIdleConns,
 				opts.ConnMaxLifetime,
 				opts.ConnMaxIdleTime,
 			)
 		} else {
-			dbCache, err = NewSQLite(opts.Path, opts.StaleTTL)
+			dbCache, err = newSQLite(opts.Path, ttl, staleTTL)
 		}
 	case "postgres", "postgresql":
 		if opts.MaxOpenConns > 0 {
 			dbCache, err = NewPostgresWithConfig(
 				opts.Path,
-				opts.StaleTTL,
+				ttl,
+				staleTTL,
 				opts.MaxOpenConns,
 				opts.MaxIdleConns,
 				opts.ConnMaxLifetime,
 				opts.ConnMaxIdleTime,
 			)
 		} else {
-			dbCache, err = NewPostgres(opts.Path, opts.StaleTTL)
+			dbCache, err = newPostgres(opts.Path, ttl, staleTTL)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported cache backend: %s", opts.Backend)
@@ -112,11 +128,7 @@ func NewWithOptions(opts *CacheOptions) (Cache, error) {
 
 	// Wrap with memory cache if enabled
 	if opts.MemoryCacheEnabled {
-		ttl := opts.TTL
-		if ttl == 0 {
-			ttl = 24 * time.Hour // default TTL
-		}
-		return NewLayeredCache(dbCache, opts.MemoryCacheSize, ttl, opts.StaleTTL), nil
+		return NewLayeredCache(dbCache, opts.MemoryCacheSize, ttl, staleTTL), nil
 	}
 
 	return dbCache, nil
@@ -129,4 +141,14 @@ func GenerateKey(method, path, body string) string {
 	hash.Write([]byte(path))
 	hash.Write([]byte(body))
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// IsCacheableMethod reports whether a method is safe to serve from cache by default.
+func IsCacheableMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD":
+		return true
+	default:
+		return false
+	}
 }

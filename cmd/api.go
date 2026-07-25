@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/afterdarksys/apiproxyd/pkg/cache"
 	"github.com/afterdarksys/apiproxyd/pkg/client"
@@ -60,7 +61,7 @@ func runAPI(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize cache
-	cacheStore, err := cache.New(cfg.CacheBackend, cfg.CachePath)
+	cacheStore, err := newCacheFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
@@ -84,10 +85,10 @@ func runAPI(cmd *cobra.Command, args []string) error {
 	cacheKey := cache.GenerateKey(method, path, apiData)
 
 	// Try cache first (unless no-cache flag)
-	if !noCache {
+	if !noCache && cache.IsCacheableMethod(method) {
 		if cached, err := cacheStore.Get(cacheKey); err == nil {
 			if viper.GetBool("debug") {
-				fmt.Fprintln(os.Stderr, "✅ Cache hit")
+				fmt.Fprintln(os.Stderr, "Cache hit")
 			}
 			printResponse(cached)
 			return nil
@@ -101,21 +102,44 @@ func runAPI(cmd *cobra.Command, args []string) error {
 
 	// Make request
 	c := client.New(cfg.APIKey)
+	c.BaseURL = cfg.EntryPoint
 	resp, err := c.Request(method, path, body, headers)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
 
 	// Cache the response
-	if err := cacheStore.Set(cacheKey, resp); err != nil {
-		if viper.GetBool("debug") {
-			fmt.Fprintf(os.Stderr, "Warning: failed to cache response: %v\n", err)
+	if cache.IsCacheableMethod(method) {
+		if err := cacheStore.Set(cacheKey, resp); err != nil {
+			if viper.GetBool("debug") {
+				fmt.Fprintf(os.Stderr, "Warning: failed to cache response: %v\n", err)
+			}
 		}
 	}
 
 	// Print response
 	printResponse(resp)
 	return nil
+}
+
+func newCacheFromConfig(cfg *config.Config) (cache.Cache, error) {
+	path := cfg.Cache.Path
+	if cfg.Cache.Backend == "postgres" || cfg.Cache.Backend == "postgresql" {
+		path = cfg.Cache.PostgresDSN
+	}
+	return cache.NewWithOptions(&cache.CacheOptions{
+		Backend:            cfg.Cache.Backend,
+		Path:               path,
+		TTL:                time.Duration(cfg.Cache.TTL) * time.Second,
+		MemoryCacheEnabled: cfg.Cache.MemoryCacheEnabled,
+		MemoryCacheSize:    cfg.Cache.MemoryCacheSize,
+		MaxOpenConns:       cfg.Cache.MaxOpenConns,
+		MaxIdleConns:       cfg.Cache.MaxIdleConns,
+		ConnMaxLifetime:    time.Duration(cfg.Cache.ConnMaxLifetime) * time.Second,
+		ConnMaxIdleTime:    time.Duration(cfg.Cache.ConnMaxIdleTime) * time.Second,
+		StaleIfError:       cfg.Cache.StaleIfError,
+		StaleTTL:           time.Duration(cfg.Cache.StaleTTL) * time.Second,
+	})
 }
 
 func printResponse(data []byte) {

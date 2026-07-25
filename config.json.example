@@ -54,7 +54,15 @@
       }
     ]
   },
+  "llm_context": {
+    "enabled": false,
+    "path": "~/.apiproxy/llm_context.db",
+    "max_request_bytes": 10485760,
+    "default_packet_bytes": 12000
+  },
   "offline_endpoints": [
+    "/darkapi/*",
+    "/dnsscience/*",
     "/v1/darkapi/ip/*",
     "/v1/nerdapi/hash",
     "/v1/computeapi/*",
@@ -62,6 +70,8 @@
     "/status"
   ],
   "whitelisted_endpoints": [
+    "/darkapi/*",
+    "/dnsscience/*",
     "/v1/darkapi/*",
     "/v1/nerdapi/*",
     "/v1/computeapi/*",

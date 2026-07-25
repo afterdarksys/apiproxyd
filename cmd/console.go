@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/afterdarksys/apiproxyd/pkg/cache"
+	"github.com/afterdarksys/apiproxyd/pkg/client"
+	"github.com/afterdarksys/apiproxyd/pkg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -52,6 +55,10 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		if line == "" {
 			continue
 		}
+		if strings.EqualFold(line, "exit") || strings.EqualFold(line, "quit") {
+			fmt.Println("Goodbye")
+			break
+		}
 
 		if err := handleConsoleCommand(line); err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -75,8 +82,7 @@ func handleConsoleCommand(line string) error {
 
 	switch cmd {
 	case "exit", "quit":
-		fmt.Println("Goodbye!")
-		os.Exit(0)
+		return nil
 	case "help", "?":
 		printConsoleHelp()
 	case "cache":
@@ -114,17 +120,35 @@ func printConsoleHelp() {
 }
 
 func handleCacheCommand(action string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	cacheStore, err := newCacheFromConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("open cache: %w", err)
+	}
+	defer cacheStore.Close()
+
 	switch action {
 	case "stats":
-		// TODO: Implement cache stats
-		fmt.Println("Cache statistics:")
-		fmt.Println("  Total entries: 0")
-		fmt.Println("  Total size: 0 bytes")
-		fmt.Println("  Hit rate: 0%")
+		stats, err := cacheStore.Stats()
+		if err != nil {
+			return fmt.Errorf("read cache stats: %w", err)
+		}
+		fmt.Printf("Entries: %d\n", stats.Entries)
+		fmt.Printf("Size: %d bytes\n", stats.SizeBytes)
+		fmt.Printf("Hit rate: %.2f%%\n", stats.HitRate*100)
 		return nil
 	case "clear":
-		// TODO: Implement cache clear
-		fmt.Println("✅ Cache cleared")
+		clearer, ok := cacheStore.(interface{ Clear() error })
+		if !ok {
+			return fmt.Errorf("cache backend does not support clearing")
+		}
+		if err := clearer.Clear(); err != nil {
+			return fmt.Errorf("clear cache: %w", err)
+		}
+		fmt.Println("Cache cleared")
 		return nil
 	default:
 		return fmt.Errorf("unknown cache action: %s (use: stats, clear)", action)
@@ -132,10 +156,38 @@ func handleCacheCommand(action string) error {
 }
 
 func executeRequest(method, path, data string) error {
-	// TODO: Execute actual API request
-	fmt.Printf("Executing: %s %s\n", method, path)
-	if data != "" {
-		fmt.Printf("Data: %s\n", data)
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
 	}
+	cacheStore, err := newCacheFromConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("open cache: %w", err)
+	}
+	defer cacheStore.Close()
+
+	cacheKey := cache.GenerateKey(method, path, data)
+	if cache.IsCacheableMethod(method) {
+		if cached, err := cacheStore.Get(cacheKey); err == nil {
+			printResponse(cached)
+			return nil
+		}
+	}
+	if cfg.APIKey == "" {
+		return fmt.Errorf("not authenticated; run 'apiproxy login' first")
+	}
+
+	apiClient := client.New(cfg.APIKey)
+	apiClient.BaseURL = cfg.EntryPoint
+	response, err := apiClient.Request(method, path, strings.NewReader(data), nil)
+	if err != nil {
+		return err
+	}
+	if cache.IsCacheableMethod(method) {
+		if err := cacheStore.Set(cacheKey, response); err != nil {
+			return fmt.Errorf("cache response: %w", err)
+		}
+	}
+	printResponse(response)
 	return nil
 }

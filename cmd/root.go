@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/afterdarksys/apiproxyd/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -32,10 +33,10 @@ Example usage:
   apiproxy api GET /v1/status       # Make API request through cache
   apiproxy daemon start             # Start background daemon
   apiproxy config show              # Display configuration`,
-	Version: fmt.Sprintf("%s (commit: %s, built: %s)", Version, Commit, BuildDate),
 }
 
 func Execute() error {
+	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", Version, Commit, BuildDate)
 	return rootCmd.Execute()
 }
 
@@ -52,6 +53,7 @@ func init() {
 
 func initConfig() {
 	if cfgFile != "" {
+		config.SetPath(cfgFile)
 		viper.SetConfigFile(cfgFile)
 	} else {
 		home, err := os.UserHomeDir()

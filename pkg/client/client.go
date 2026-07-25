@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -175,19 +177,26 @@ func (c *Client) ValidateKey() (*KeyInfo, error) {
 
 // Request makes an API request through the proxy
 func (c *Client) Request(method, path string, body io.Reader, headers map[string]string) ([]byte, error) {
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	// Use request deduplication if enabled
 	if c.singleFlight != nil {
-		// Create a unique key for this request
-		// Note: This is a simple implementation. For POST/PUT with different bodies,
-		// you might want to include a hash of the body in the key
-		key := fmt.Sprintf("%s:%s", method, path)
+		bodyHash := sha256.Sum256(bodyBytes)
+		key := fmt.Sprintf("%s:%s:%x", method, path, bodyHash)
 
 		return c.singleFlight.Do(key, func() ([]byte, error) {
-			return c.doRequest(method, path, body, headers)
+			return c.doRequest(method, path, bytes.NewReader(bodyBytes), headers)
 		})
 	}
 
-	return c.doRequest(method, path, body, headers)
+	return c.doRequest(method, path, bytes.NewReader(bodyBytes), headers)
 }
 
 // doRequest performs the actual HTTP request with circuit breaker protection
@@ -215,16 +224,19 @@ func (c *Client) executeRequest(method, url string, body io.Reader, headers map[
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.AuthType == "Bearer" {
-		req.Header.Set("Authorization", "Bearer "+c.OAuthToken)
-	} else {
-		req.Header.Set("X-API-Key", c.APIKey)
-	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip") // Enable compression
 
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+
+	// Configured credentials always win over caller-supplied headers.
+	if c.AuthType == "Bearer" {
+		req.Header.Set("Authorization", "Bearer "+c.OAuthToken)
+		req.Header.Del("X-API-Key")
+	} else {
+		req.Header.Set("X-API-Key", c.APIKey)
+		req.Header.Del("Authorization")
 	}
 
 	resp, err := c.HTTPClient.Do(req)

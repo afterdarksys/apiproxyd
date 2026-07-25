@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"github.com/afterdarksys/apiproxyd/pkg/client"
 	"github.com/afterdarksys/apiproxyd/pkg/cluster"
 	"github.com/afterdarksys/apiproxyd/pkg/config"
+	"github.com/afterdarksys/apiproxyd/pkg/llmcontext"
 	"github.com/afterdarksys/apiproxyd/pkg/metrics"
 	"github.com/afterdarksys/apiproxyd/pkg/middleware"
 	"github.com/afterdarksys/apiproxyd/pkg/plugin"
@@ -41,6 +43,7 @@ type Daemon struct {
 	rateLimiter    *middleware.RateLimiter
 	ssrfProtection *middleware.SSRFProtection
 	scheduler      *Scheduler
+	llmContext     *llmcontext.Store
 	gzipPool       sync.Pool
 	singleFlight   *client.SingleFlight
 
@@ -65,11 +68,17 @@ func (d *Daemon) Start() error {
 	d.cfg = cfg
 
 	// Override host/port if provided
-	if d.host == "" || d.host == "127.0.0.1" {
+	if d.host == "" {
 		d.host = cfg.Server.Host
 	}
-	if d.port == 0 || d.port == 9002 {
+	if d.port == 0 {
 		d.port = cfg.Server.Port
+	}
+	if !isLoopbackHost(d.host) && !cfg.Security.AllowRemote {
+		return fmt.Errorf(
+			"refusing non-loopback bind to %q; set security.allow_remote=true only behind an authenticating network boundary",
+			d.host,
+		)
 	}
 
 	// Initialize cache with advanced options
@@ -88,6 +97,8 @@ func (d *Daemon) Start() error {
 		MaxIdleConns:       cfg.Cache.MaxIdleConns,
 		ConnMaxLifetime:    time.Duration(cfg.Cache.ConnMaxLifetime) * time.Second,
 		ConnMaxIdleTime:    time.Duration(cfg.Cache.ConnMaxIdleTime) * time.Second,
+		StaleIfError:       cfg.Cache.StaleIfError,
+		StaleTTL:           time.Duration(cfg.Cache.StaleTTL) * time.Second,
 	}
 
 	cacheStore, err := cache.NewWithOptions(cacheOpts)
@@ -196,7 +207,7 @@ func (d *Daemon) Start() error {
 				}
 				d.taskQueue = q
 			} else {
-				fmt.Println("⚠️ River queue requested but no postgres_dsn provided")
+				fmt.Println("Warning: River queue requested but no postgres_dsn provided")
 			}
 		case "asynq":
 			q, err := queue.NewAsynqQueue(cfg.Queue.RedisAddr)
@@ -210,7 +221,7 @@ func (d *Daemon) Start() error {
 			if err := d.taskQueue.Start(context.Background()); err != nil {
 				return fmt.Errorf("failed to start task queue: %w", err)
 			}
-			fmt.Printf("✅ Task Queue started using backend: %s\n", cfg.Queue.Backend)
+			fmt.Printf("Task queue started using backend: %s\n", cfg.Queue.Backend)
 		}
 	}
 
@@ -220,10 +231,19 @@ func (d *Daemon) Start() error {
 		if err := d.clusterNode.Start(cfg.Cluster.Port); err != nil {
 			return fmt.Errorf("failed to start cluster node: %w", err)
 		}
-		fmt.Printf("✅ Cluster Node started on port: %d (ID: %s)\n", cfg.Cluster.Port, cfg.Cluster.NodeID)
+		fmt.Printf("Cluster node started on port: %d (ID: %s)\n", cfg.Cluster.Port, cfg.Cluster.NodeID)
 
 		// In a full implementation, the daemon would maintain active connections
 		// to the listed `cfg.Cluster.Peers` to broadcast CacheInvalidations.
+	}
+
+	if cfg.LLMContext.Enabled {
+		store, err := llmcontext.NewSQLiteStore(cfg.LLMContext.Path)
+		if err != nil {
+			return fmt.Errorf("failed to initialize llm context store: %w", err)
+		}
+		d.llmContext = store
+		fmt.Printf("LLM context store enabled: %s\n", cfg.LLMContext.Path)
 	}
 
 	// Create HTTP server with middleware chain
@@ -233,6 +253,13 @@ func (d *Daemon) Start() error {
 	mux.HandleFunc("/cache/stats", d.handleCacheStats)
 	mux.HandleFunc("/cache/clear", d.handleCacheClear)
 	mux.HandleFunc("/metrics", d.handleMetrics)
+	if d.llmContext != nil {
+		mux.Handle("/llm/", llmcontext.NewHandler(
+			d.llmContext,
+			cfg.LLMContext.MaxRequestBytes,
+			cfg.LLMContext.DefaultPacketBytes,
+		))
+	}
 
 	// Build middleware chain
 	handler := http.Handler(mux)
@@ -283,24 +310,33 @@ func (d *Daemon) Start() error {
 			PreferServerCipherSuites: true,
 		}
 
-		// Enable HTTP/2 if configured
-		if cfg.Server.EnableHTTP2 {
+		// A non-nil empty TLSNextProto map disables automatic HTTP/2.
+		if !cfg.Server.EnableHTTP2 {
 			d.server.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 		}
 	}
 
+	listener, err := net.Listen("tcp", d.server.Addr)
+	if err != nil {
+		d.cleanup()
+		return fmt.Errorf("failed to listen on %s: %w", d.server.Addr, err)
+	}
+
 	// Write PID file with secure permissions
 	if err := d.writePIDFile(); err != nil {
+		_ = listener.Close()
+		d.cleanup()
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
 	// Start server in background
+	serverErr := make(chan error, 1)
 	go func() {
 		protocol := "http"
 		if cfg.Server.TLSEnabled {
 			protocol = "https"
 		}
-		fmt.Printf("✅ Daemon started on %s://%s:%d\n", protocol, d.host, d.port)
+		fmt.Printf("Daemon started on %s://%s:%d\n", protocol, d.host, d.port)
 		fmt.Printf("   Features enabled:\n")
 		if cfg.Cache.MemoryCacheEnabled {
 			fmt.Printf("   - In-memory cache (L1): %d entries\n", cfg.Cache.MemoryCacheSize)
@@ -323,21 +359,29 @@ func (d *Daemon) Start() error {
 
 		var err error
 		if cfg.Server.TLSEnabled {
-			err = d.server.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			err = d.server.ServeTLS(listener, cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		} else {
-			err = d.server.ListenAndServe()
+			err = d.server.Serve(listener)
 		}
-
-		if err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		}
+		serverErr <- err
 	}()
 
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	<-sigChan
+	select {
+	case <-sigChan:
+	case err := <-serverErr:
+		signal.Stop(sigChan)
+		d.removePIDFile()
+		d.cleanup()
+		if err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("server stopped unexpectedly: %w", err)
+		}
+		return nil
+	}
+	signal.Stop(sigChan)
 	fmt.Println("\nShutting down daemon...")
 
 	// Graceful shutdown with timeout
@@ -348,33 +392,35 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to shutdown server: %w", err)
 	}
 
-	// Cleanup resources
-	d.cache.Close()
+	d.cleanup()
+	d.removePIDFile()
 
+	fmt.Println("Daemon stopped")
+	return nil
+}
+
+func (d *Daemon) cleanup() {
 	if d.scheduler != nil {
 		d.scheduler.Stop()
 	}
-
 	if d.rateLimiter != nil {
 		d.rateLimiter.Close()
 	}
-
 	if d.pluginManager != nil {
-		d.pluginManager.Shutdown()
+		_ = d.pluginManager.Shutdown()
 	}
-
 	if d.taskQueue != nil {
-		d.taskQueue.Stop()
+		_ = d.taskQueue.Stop()
 	}
-
 	if d.clusterNode != nil {
 		d.clusterNode.Stop()
 	}
-
-	d.removePIDFile()
-
-	fmt.Println("✅ Daemon stopped")
-	return nil
+	if d.llmContext != nil {
+		_ = d.llmContext.Close()
+	}
+	if d.cache != nil {
+		_ = d.cache.Close()
+	}
 }
 
 func (d *Daemon) Stop() error {
@@ -403,17 +449,26 @@ func (d *Daemon) Stop() error {
 	}
 
 	os.Remove(pidPath)
-	fmt.Println("✅ Daemon stopped")
+	fmt.Println("Daemon stopped")
 	return nil
 }
 
 func (d *Daemon) Status() error {
+	if cfg, err := config.Load(); err == nil {
+		if d.host == "" {
+			d.host = cfg.Server.Host
+		}
+		if d.port == 0 {
+			d.port = cfg.Server.Port
+		}
+	}
+
 	pidPath := d.pidFilePath()
 
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("❌ Daemon is not running")
+			fmt.Println("Daemon is not running")
 			return nil
 		}
 		return fmt.Errorf("failed to read PID file: %w", err)
@@ -426,18 +481,18 @@ func (d *Daemon) Status() error {
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		fmt.Println("❌ Daemon is not running")
+		fmt.Println("Daemon is not running")
 		return nil
 	}
 
 	// Check if process is actually running
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		fmt.Println("❌ Daemon is not running (stale PID file)")
+		fmt.Println("Daemon is not running (stale PID file)")
 		os.Remove(pidPath)
 		return nil
 	}
 
-	fmt.Printf("✅ Daemon is running (PID: %d)\n", pid)
+	fmt.Printf("Daemon is running (PID: %d)\n", pid)
 
 	// Try to get health status
 	resp, err := http.Get(fmt.Sprintf("http://%s:%d/health", d.host, d.port))
@@ -464,33 +519,32 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 		dbStatus = fmt.Sprintf("error: %v", err)
 	}
 
-	status := "ok"
-	if !healthy {
-		status = "degraded"
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}
-
-	response := map[string]interface{}{
-		"status":   status,
-		"version":  "0.2.0",
-		"database": dbStatus,
-	}
-
 	// Add component health checks
 	components := make(map[string]interface{})
 	if d.client != nil {
 		components["upstream_client"] = "ok"
 		if d.client.GetCircuitBreakerStats()["state"] == "open" {
 			components["upstream_client"] = "circuit_open"
-			status = "degraded"
+			healthy = false
 		}
 	}
 	if d.rateLimiter != nil {
 		components["rate_limiter"] = "ok"
 	}
-	response["components"] = components
 
-	json.NewEncoder(w).Encode(response)
+	status := "ok"
+	statusCode := http.StatusOK
+	if !healthy {
+		status = "degraded"
+		statusCode = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     status,
+		"version":    "0.3.0",
+		"database":   dbStatus,
+		"components": components,
+	})
 }
 
 func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +590,8 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Create plugin request
 	pluginReq := plugin.FromHTTPRequest(r, body)
 	pluginReq.Endpoint = endpoint
+	// Only plugins may assign a custom cache key; never trust this header from a client.
+	delete(pluginReq.Headers, "X-Custom-Cache-Key")
 
 	// Call plugin OnRequest hooks
 	if d.pluginManager != nil {
@@ -553,6 +609,10 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// Update endpoint and body in case plugins modified them
 		endpoint = pluginReq.Endpoint
 		body = pluginReq.Body
+		if !d.cfg.IsEndpointWhitelisted(endpoint) {
+			http.Error(w, "Plugin-routed endpoint is not whitelisted", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Generate cache key or use custom key provided by plugin
@@ -565,9 +625,10 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Check if this is an offline endpoint
 	isOffline := d.cfg.IsEndpointOffline(endpoint)
+	cacheable := cache.IsCacheableMethod(pluginReq.Method)
 
 	// Try cache first
-	if cached, err := d.cache.Get(cacheKey); err == nil {
+	if cached, err := d.cache.Get(cacheKey); cacheable && err == nil {
 		pluginResp := &plugin.Response{
 			StatusCode: http.StatusOK,
 			Headers:    map[string]string{"Content-Type": "application/json"},
@@ -587,7 +648,7 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "HIT")
-		if isOffline {
+		if isOffline && cacheable {
 			w.Header().Set("X-Offline", "true")
 		}
 		for k, v := range pluginResp.Headers {
@@ -598,14 +659,18 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If offline endpoint and not in cache, return error
-	if isOffline {
-		http.Error(w, "Offline endpoint not available in cache", http.StatusServiceUnavailable)
-		return
-	}
-
 	// Check authentication for online requests
 	if d.client == nil {
+		if isOffline {
+			if stale, staleErr := d.cache.GetStale(cacheKey); staleErr == nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Cache", "STALE")
+				w.Header().Set("X-Offline", "true")
+				d.writeResponse(w, r, stale, startTime, true)
+				d.metrics.RecordRequest(r.Method, http.StatusOK, time.Since(startTime), true, int64(len(stale)))
+				return
+			}
+		}
 		http.Error(w, "Not authenticated", http.StatusUnauthorized)
 		return
 	}
@@ -639,7 +704,7 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		// Try to serve stale cache if configured
-		if d.cfg.Cache.StaleIfError {
+		if cacheable && d.cfg.Cache.StaleIfError {
 			if stale, staleErr := d.cache.GetStale(cacheKey); staleErr == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Cache", "STALE")
@@ -675,15 +740,30 @@ func (d *Daemon) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cache response (with longer TTL for offline endpoints)
-	d.cache.Set(cacheKey, pluginResp.Body)
+	if cacheable {
+		if err := d.cache.Set(cacheKey, pluginResp.Body); err != nil {
+			w.Header().Set("X-Cache-Store", "ERROR")
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Cache", "MISS")
+	if cacheable {
+		w.Header().Set("X-Cache", "MISS")
+	} else {
+		w.Header().Set("X-Cache", "BYPASS")
+	}
 	for k, v := range pluginResp.Headers {
 		w.Header().Set(k, v)
 	}
+	if pluginResp.StatusCode > 0 && pluginResp.StatusCode != http.StatusOK {
+		w.WriteHeader(pluginResp.StatusCode)
+	}
 	d.writeResponse(w, r, pluginResp.Body, startTime, false)
-	d.metrics.RecordRequest(r.Method, http.StatusOK, time.Since(startTime), false, int64(len(pluginResp.Body)))
+	statusCode := pluginResp.StatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	d.metrics.RecordRequest(r.Method, statusCode, time.Since(startTime), false, int64(len(pluginResp.Body)))
 }
 
 // writeResponse writes response with optional gzip compression
@@ -720,6 +800,12 @@ func (d *Daemon) writeResponse(w http.ResponseWriter, r *http.Request, data []by
 }
 
 func (d *Daemon) handleCacheStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	stats, err := d.cache.Stats()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -731,14 +817,20 @@ func (d *Daemon) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleCacheClear(w http.ResponseWriter, r *http.Request) {
-	// Clear L1 cache if layered
-	if layered, ok := d.cache.(*cache.LayeredCache); ok {
-		layered.ClearL1()
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodPost+", "+http.MethodDelete)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	// Trigger immediate cleanup of expired entries
-	if d.scheduler != nil {
-		d.scheduler.RunNow()
+	clearer, ok := d.cache.(interface{ Clear() error })
+	if !ok {
+		http.Error(w, "Cache backend does not support clearing", http.StatusNotImplemented)
+		return
+	}
+	if err := clearer.Clear(); err != nil {
+		http.Error(w, "Failed to clear cache", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -791,4 +883,12 @@ func (d *Daemon) writePIDFile() error {
 
 func (d *Daemon) removePIDFile() {
 	os.Remove(d.pidFilePath())
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/afterdarksys/apiproxyd/pkg/client"
 	"github.com/afterdarksys/apiproxyd/pkg/config"
@@ -17,13 +16,12 @@ var loginCmd = &cobra.Command{
 	Short: "Authenticate with api.apiproxy.app",
 	Long: `Login to api.apiproxy.app and store authentication token locally.
 
-The token is stored securely in ~/.apiproxy/credentials and used
-for all subsequent API requests.
+The API key is stored with owner-only permissions under ~/.apiproxy
+and used for subsequent API requests.
 
 Example:
   apiproxy login
-  apiproxy login --api-key apx_live_xxxxx
-  apiproxy login --oauth2`,
+  apiproxy login --api-key apx_live_xxxxx`,
 	RunE: runLogin,
 }
 
@@ -35,7 +33,7 @@ var (
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().StringVar(&apiKey, "api-key", "", "API key for authentication")
-	loginCmd.Flags().BoolVar(&useOAuth2, "oauth2", false, "Use OAuth2 Device Authorization Flow")
+	loginCmd.Flags().BoolVar(&useOAuth2, "oauth2", false, "OAuth2 device flow (not implemented)")
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
@@ -72,10 +70,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	// Save credentials
 	cfg := &config.Config{
-		APIKey:   apiKey,
-		Endpoint: c.BaseURL,
-		UserID:   info.UserID,
-		Tier:     info.Tier,
+		APIKey:     apiKey,
+		EntryPoint: c.BaseURL,
+		UserID:     info.UserID,
+		Tier:       info.Tier,
 	}
 
 	if err := config.SaveCredentials(cfg); err != nil {
@@ -92,7 +90,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	apiKeys.OAuthToken = ""
 	config.SaveAPIKeys(apiKeys)
 
-	fmt.Printf("✅ Successfully authenticated as %s\n", info.Email)
+	fmt.Printf("Successfully authenticated as %s\n", info.Email)
 	fmt.Printf("   Tier: %s\n", info.Tier)
 	fmt.Printf("   Rate Limit: %d requests/minute\n", info.RateLimit)
 	fmt.Printf("   Monthly Quota: %d requests\n", info.MonthlyQuota)
@@ -101,31 +99,5 @@ func runLogin(cmd *cobra.Command, args []string) error {
 }
 
 func runOAuth2Login() error {
-	fmt.Println("Initiating OAuth2 Device Authorization Flow...")
-
-	// Mock requesting a device code
-	fmt.Println("\nPlease visit the following URL to authenticate:")
-	fmt.Println("  https://apiproxy.app/auth/device")
-	fmt.Println("\nAnd enter the code: ABC-DEF-GHI")
-
-	fmt.Println("\nWaiting for authentication...")
-
-	// Simulate waiting for user to auth
-	time.Sleep(3 * time.Second)
-
-	mockToken := "apx_oauth_mock_TOKEN_" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	// Save it to API keys
-	apiKeys, err := config.LoadAPIKeys()
-	if err != nil || apiKeys == nil {
-		apiKeys = &config.APIKeysConfig{}
-	}
-	apiKeys.OAuthToken = mockToken
-
-	if err := config.SaveAPIKeys(apiKeys); err != nil {
-		return fmt.Errorf("failed to save OAuth2 token: %w", err)
-	}
-
-	fmt.Println("✅ Successfully authenticated via OAuth2!")
-	return nil
+	return fmt.Errorf("OAuth2 device login is not implemented; use --api-key")
 }

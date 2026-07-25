@@ -139,7 +139,7 @@ def install_binary():
         if platform.system() != 'Windows':
             path_dirs = os.environ.get('PATH', '').split(':')
             if str(install_dir) not in path_dirs:
-                print_colored(f"\n  ⚠ Add to PATH: export PATH=\"{install_dir}:$PATH\"", 'yellow')
+                print_colored(f"\n  Warning: add to PATH: export PATH=\"{install_dir}:$PATH\"", 'yellow')
 
         return True
 
@@ -165,7 +165,7 @@ def create_config():
 
     # Check if config already exists
     if config_file.exists():
-        print_colored("  ⚠ Config already exists, skipping", 'yellow')
+        print_colored("  Warning: config already exists, skipping", 'yellow')
         return True
 
     # Copy example config if available
@@ -173,7 +173,7 @@ def create_config():
     if example_config.exists():
         shutil.copy2(example_config, config_file)
         print_colored(f"  ✓ Config created: {config_file}", 'green')
-        print_colored(f"  ⚠ Edit config and add your API key!", 'yellow')
+        print_colored("  Warning: edit config and add your API key", 'yellow')
         return True
     else:
         # Create minimal config
@@ -200,7 +200,7 @@ def create_config():
             json.dump(config, f, indent=2)
 
         print_colored(f"  ✓ Config created: {config_file}", 'green')
-        print_colored(f"  ⚠ Edit config and add your API key!", 'yellow')
+        print_colored("  Warning: edit config and add your API key", 'yellow')
         return True
 
 

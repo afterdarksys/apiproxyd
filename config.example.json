@@ -25,6 +25,7 @@
     "cleanup_interval": 3600
   },
   "security": {
+    "allow_remote": false,
     "rate_limit_enabled": true,
     "rate_limit_per_ip": 60,
     "rate_limit_per_key": 300,
@@ -53,11 +54,21 @@
     "circuit_breaker_half_open": 3,
     "deduplication_enabled": true
   },
+  "llm_context": {
+    "enabled": false,
+    "path": "~/.apiproxy/llm_context.db",
+    "max_request_bytes": 10485760,
+    "default_packet_bytes": 12000
+  },
   "offline_endpoints": [
+    "/darkapi/*",
+    "/dnsscience/*",
     "/health",
     "/status"
   ],
   "whitelisted_endpoints": [
+    "/darkapi/*",
+    "/dnsscience/*",
     "/v1/darkapi/*",
     "/v1/nerdapi/*",
     "/v1/computeapi/*"

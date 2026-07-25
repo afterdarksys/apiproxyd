@@ -31,8 +31,8 @@ var (
 
 func init() {
 	rootCmd.AddCommand(daemonCmd)
-	daemonCmd.Flags().IntVarP(&daemonPort, "port", "p", 9002, "daemon listen port")
-	daemonCmd.Flags().StringVar(&daemonHost, "host", "127.0.0.1", "daemon listen host")
+	daemonCmd.Flags().IntVarP(&daemonPort, "port", "p", 0, "daemon listen port (default from config)")
+	daemonCmd.Flags().StringVar(&daemonHost, "host", "", "daemon listen host (default from config)")
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
@@ -42,7 +42,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 
 	switch action {
 	case "start":
-		fmt.Printf("Starting apiproxyd daemon on %s:%d...\n", daemonHost, daemonPort)
+		fmt.Println("Starting apiproxyd daemon...")
 		return d.Start()
 	case "stop":
 		fmt.Println("Stopping apiproxyd daemon...")

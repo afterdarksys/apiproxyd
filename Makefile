@@ -2,7 +2,7 @@
 
 # Build variables
 BINARY_NAME=apiproxy
-VERSION?=0.1.0
+VERSION?=0.3.0
 COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 BUILD_DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(BUILD_DATE)"
@@ -16,7 +16,7 @@ help: ## Show this help message
 build: ## Build the binary
 	@echo "Building $(BINARY_NAME)..."
 	go build $(LDFLAGS) -o $(BINARY_NAME) main.go
-	@echo "✅ Built: $(BINARY_NAME)"
+	@echo "Built: $(BINARY_NAME)"
 
 build-all: ## Build for all platforms
 	@echo "Building for multiple platforms..."
@@ -24,12 +24,12 @@ build-all: ## Build for all platforms
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_NAME)-darwin-amd64 main.go
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_NAME)-darwin-arm64 main.go
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe main.go
-	@echo "✅ Built all platforms"
+	@echo "Built all platforms"
 
 install: build ## Install to /usr/local/bin
 	@echo "Installing to /usr/local/bin..."
 	sudo mv $(BINARY_NAME) /usr/local/bin/
-	@echo "✅ Installed: /usr/local/bin/$(BINARY_NAME)"
+	@echo "Installed: /usr/local/bin/$(BINARY_NAME)"
 
 test: ## Run tests
 	@echo "Running tests..."
@@ -48,18 +48,23 @@ clean: ## Clean build artifacts
 	rm -f $(BINARY_NAME)
 	rm -f $(BINARY_NAME)-*
 	rm -f ~/.apiproxy/cache.db
-	@echo "✅ Cleaned"
+	@echo "Cleaned"
 
 deps: ## Download dependencies
 	@echo "Downloading dependencies..."
 	go mod download
 	go mod tidy
-	@echo "✅ Dependencies updated"
+	@echo "Dependencies updated"
 
 docker-build: ## Build Docker image
 	@echo "Building Docker image..."
-	docker build -t apiproxyd:$(VERSION) .
-	@echo "✅ Built: apiproxyd:$(VERSION)"
+	docker build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t apiproxyd:$(VERSION) \
+		-t apiproxyd:latest .
+	@echo "Built: apiproxyd:$(VERSION)"
 
 docker-run: ## Run Docker container
 	@echo "Running Docker container..."
@@ -68,7 +73,7 @@ docker-run: ## Run Docker container
 init-config: ## Initialize default config
 	@echo "Creating config.json..."
 	cp config.json.example config.json
-	@echo "✅ Created config.json - edit with your API key"
+	@echo "Created config.json - edit with your API key"
 
 dev: ## Run in development mode
 	@echo "Running in development mode..."

@@ -5,6 +5,51 @@ All notable changes to apiproxyd will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Historical entries describe the intended feature set at the time. The current
+support boundary and unverified subsystems are documented in
+[README.md](README.md) and [BUGS.md](BUGS.md).
+
+## [Unreleased]
+
+### Added
+
+- Optional SQLite-backed LLM context sessions, event storage, context packet
+  building, and exact response caching.
+- Regression tests for configuration merging and redaction, cache expiry and
+  clearing, request behavior, and daemon startup.
+- Multi-stage, non-root Docker packaging and reproducible Go toolchain metadata.
+- A maintained known-limitations handoff in `BUGS.md`.
+
+### Changed
+
+- Updated the supported Go version and direct dependencies.
+- Updated default `api.apiproxy.app` endpoint patterns.
+- Documented the project as beta and separated tested core behavior from
+  experimental plugins and distributed features.
+- Made partial configuration files inherit safe defaults and expanded `~` paths.
+- Limited automatic caching to safe `GET` and `HEAD` requests.
+- Made CLI output script-friendly and removed decorative status emoji.
+
+### Fixed
+
+- Honored custom configuration paths and environment overrides consistently.
+- Corrected cache TTL and stale-entry handling across memory and SQLite layers.
+- Made cache clearing remove persisted entries.
+- Included request bodies in deduplication identity.
+- Prevented callers from overriding configured upstream credentials.
+- Decompressed gzip responses correctly and improved startup/port-conflict
+  error reporting.
+- Removed the fake successful OAuth device-flow behavior; the unsupported mode
+  now fails explicitly.
+
+### Security
+
+- Refuse non-loopback listeners unless `security.allow_remote` is explicitly
+  enabled.
+- Redact API keys and nested plugin secrets from configuration output.
+- Updated dependencies to remove all vulnerabilities reachable from application
+  code according to `govulncheck`.
+
 ## [0.3.0] - 2026-03-04
 
 ### Added
@@ -56,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - L2 persistent cache (SQLite/PostgreSQL, <5ms access)
   - Automatic cache promotion from L2 to L1
 - **Rate Limiting**: Token bucket algorithm with per-IP and per-API-key limits
-- **OAuth2 Support**: Device authorization flow for authentication
+- **OAuth2 Placeholder**: An incomplete device-flow mock was present; it was
+  removed from the supported scope in the subsequent cleanup.
 - **API Key Management**: Bcrypt hashing, multi-tier support (Free, Starter, Professional, Business, Enterprise)
 - **SSL/TLS Support**:
   - TLS 1.2+ only
@@ -90,10 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Better error handling and recovery mechanisms
 
 ### Performance
-- Throughput: 10,000-100,000+ requests/second
-- L1 cache latency: <1ms (p99)
-- L2 cache latency: <5ms (p99)
-- Memory footprint: ~50MB base + ~1KB per cached entry
+- Historical release notes claimed throughput and latency figures without a
+  checked-in reproducible benchmark. Those figures are not considered verified.
 
 ## [0.1.0] - Initial Release
 

@@ -142,7 +142,26 @@ POST /cache/clear
 Response: {"status": "cleared"}
 ```
 
-### 5. Configuration (`pkg/config/`)
+### 5. LLM Context Store (`pkg/llmcontext/`)
+
+Optional SQLite-backed session memory for coding agents and LLM provider adapters:
+
+- **Session identity**: Stable sessions keyed by provider, working directory, git remote, and branch
+- **Context events**: Append-only records for summaries, decisions, tool output, file notes, and user intent
+- **Packet building**: Selects relevant stored events for a compact task packet when model context is tight
+- **Exact response cache**: Stores provider/model/request keyed responses separately from the normal API cache
+
+#### Endpoints
+
+```
+POST /llm/sessions       # Create or update a repo/workdir session
+POST /llm/events         # Append context to a session
+POST /llm/packet         # Build a compact task packet from stored context
+POST /llm/cache/lookup   # Exact LLM response cache lookup
+POST /llm/cache/store    # Store an exact LLM response cache entry
+```
+
+### 6. Configuration (`pkg/config/`)
 
 YAML-based configuration stored in `~/.apiproxy/config.yml`:
 
@@ -162,6 +181,13 @@ daemon_port: 9002
 
 # PostgreSQL (if using postgres backend)
 postgres_dsn: "host=localhost port=5432 user=apiproxy dbname=apiproxy_cache"
+
+# LLM context storage (optional)
+llm_context:
+  enabled: false
+  path: /home/user/.apiproxy/llm_context.db
+  max_request_bytes: 10485760
+  default_packet_bytes: 12000
 ```
 
 ## Request Flow

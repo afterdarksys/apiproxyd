@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/afterdarksys/apiproxyd/pkg/config"
 	"github.com/spf13/cobra"
@@ -54,16 +56,17 @@ func showConfig() error {
 	}
 
 	format := viper.GetString("format")
+	displayCfg := redactConfig(cfg)
 
 	switch format {
 	case "yaml", "yml":
-		data, err := yaml.Marshal(cfg)
+		data, err := yaml.Marshal(displayCfg)
 		if err != nil {
 			return err
 		}
 		fmt.Println(string(data))
 	case "json":
-		data, err := cfg.ToJSON()
+		data, err := displayCfg.ToJSON()
 		if err != nil {
 			return err
 		}
@@ -89,6 +92,46 @@ func showConfig() error {
 	return nil
 }
 
+func redactConfig(cfg *config.Config) *config.Config {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return cfg
+	}
+	var redacted config.Config
+	if err := json.Unmarshal(data, &redacted); err != nil {
+		return cfg
+	}
+	if redacted.APIKey != "" {
+		redacted.APIKey = "[REDACTED]"
+	}
+	if redacted.Cache.PostgresDSN != "" {
+		redacted.Cache.PostgresDSN = "[REDACTED]"
+	}
+	if redacted.Security.MetricsAuthToken != "" {
+		redacted.Security.MetricsAuthToken = "[REDACTED]"
+	}
+	for i := range redacted.Plugins.Plugins {
+		redactMap(redacted.Plugins.Plugins[i].Config)
+	}
+	return &redacted
+}
+
+func redactMap(values map[string]interface{}) {
+	for key, value := range values {
+		lowerKey := strings.ToLower(key)
+		if strings.Contains(lowerKey, "key") ||
+			strings.Contains(lowerKey, "token") ||
+			strings.Contains(lowerKey, "password") ||
+			strings.Contains(lowerKey, "secret") {
+			values[key] = "[REDACTED]"
+			continue
+		}
+		if nested, ok := value.(map[string]interface{}); ok {
+			redactMap(nested)
+		}
+	}
+}
+
 func setConfig(key, value string) error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -103,7 +146,7 @@ func setConfig(key, value string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	fmt.Printf("✅ Set %s = %s\n", key, value)
+	fmt.Printf("Set %s = %s\n", key, value)
 	return nil
 }
 
@@ -114,6 +157,6 @@ func initConfigFile() error {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
 
-	fmt.Printf("✅ Created default configuration at %s\n", config.ConfigPath())
+	fmt.Printf("Created default configuration at %s\n", config.ConfigPath())
 	return nil
 }
